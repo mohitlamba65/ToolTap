@@ -24,10 +24,78 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
         return {};
     }
 
+    const provider = (process.env.WHATSAPP_PROVIDER || "meta").toLowerCase();
+
+    if (provider === "twilio") {
+        const textContent = extractTextFromIntent(responseIntent);
+        await sendToTwilio(recipientPhone, textContent);
+        return {};
+    }
+
     const payload = buildPayload(responseIntent, recipientPhone);
     await sendToWhatsApp(payload);
 
     return { whatsappPayload: payload };
+}
+
+function extractTextFromIntent(intent: ResponseIntent): string {
+    let text = intent.text || "";
+    if (intent.header) text = `*${intent.header}*\n\n` + text;
+    if (intent.buttons && intent.buttons.length > 0) {
+        text += `\n\n📌 Options:\n` + intent.buttons.map((b, i) => `${i + 1}. ${b.title}`).join("\n");
+    } else if (intent.listSections && intent.listSections.length > 0) {
+        text += `\n\n📋 Options:\n`;
+        intent.listSections.forEach(s => {
+            text += `*${s.title}*\n` + s.rows.map(r => `• ${r.title}${r.description ? `: ${r.description}` : ""}`).join("\n") + "\n";
+        });
+    }
+    if (intent.footer) text += `\n\n_${intent.footer}_`;
+    return text;
+}
+
+async function sendToTwilio(to: string, bodyText: string): Promise<void> {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER || "+14155238886";
+
+    if (!accountSid || !authToken) {
+        console.error("❌ [DeliveryNode] TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN is missing in .env");
+        return;
+    }
+
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+    const cleanTo = to.replace("whatsapp:", "").replace("+", "").trim();
+    const formattedTo = `whatsapp:+${cleanTo}`;
+    const cleanFrom = fromNumber.replace("whatsapp:", "").replace("+", "").trim();
+    const formattedFrom = `whatsapp:+${cleanFrom}`;
+
+    const params = new URLSearchParams();
+    params.append("From", formattedFrom);
+    params.append("To", formattedTo);
+    params.append("Body", bodyText);
+
+    const authHeader = "Basic " + Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                Authorization: authHeader,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: params.toString(),
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error(`❌ [DeliveryNode] Twilio API Error (${response.status}): ${errText}`);
+        } else {
+            const data = await response.json() as any;
+            console.log(`✅ [DeliveryNode] Twilio WhatsApp message sent to ${formattedTo}: ${data.sid}`);
+        }
+    } catch (e) {
+        console.error("❌ [DeliveryNode] Twilio network error:", e);
+    }
 }
 
 /**
@@ -160,11 +228,25 @@ async function sendToWhatsApp(payload: WhatsAppPayload): Promise<void> {
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error(`[DeliveryNode] WhatsApp API error: ${response.status} - ${errorText}`);
+            let parsedError: any = {};
+            try { parsedError = JSON.parse(errorText); } catch (_) {}
             
-            // If interactive message fails (e.g. format issue), fall back to text
+            const errDetail = parsedError?.error?.error_data?.details || parsedError?.error?.message || errorText;
+            const errCode = parsedError?.error?.code;
+
+            console.error(`❌ [DeliveryNode] Meta WhatsApp API Error (${response.status}): Code ${errCode} - ${errDetail}`);
+            
+            if (errCode === 131030) {
+                console.error(`💡 [Meta Setup Required]: Phone number ${payload.to} is NOT in your Meta Developer Portal test recipient list.`);
+                console.error(`👉 Fix: Go to Meta Developers Portal -> WhatsApp -> API Setup -> Add phone number '${payload.to}' to 'To' list & enter OTP.`);
+            } else if (errCode === 190) {
+                console.error(`💡 [Meta Setup Required]: Your WHATSAPP_API_TOKEN has expired.`);
+                console.error(`👉 Fix: Generate a new Temporary/Permanent Access Token in Meta Developers Portal & update WHATSAPP_API_TOKEN in .env.`);
+            }
+
+            // Fall back to plain text if interactive/image/document failed
             if (payload.type === "interactive" || payload.type === "image" || payload.type === "document") {
-                console.log("[DeliveryNode] Falling back to text message...");
+                console.log("🔄 [DeliveryNode] Attempting text fallback delivery...");
                 const textBody = "text" in payload 
                     ? (payload as any).text?.body
                     : (payload as any).interactive?.body?.text || "I encountered an error formatting my response.";
@@ -177,7 +259,7 @@ async function sendToWhatsApp(payload: WhatsAppPayload): Promise<void> {
                     text: { body: textBody },
                 };
                 
-                await fetch(url, {
+                const fbRes = await fetch(url, {
                     method: "POST",
                     headers: {
                         Authorization: `Bearer ${apiToken}`,
@@ -185,12 +267,20 @@ async function sendToWhatsApp(payload: WhatsAppPayload): Promise<void> {
                     },
                     body: JSON.stringify(fallbackPayload),
                 });
+
+                if (fbRes.ok) {
+                    const fbData = await fbRes.json() as any;
+                    console.log(`✅ [DeliveryNode] Fallback text message delivered successfully: ${fbData.messages?.[0]?.id}`);
+                } else {
+                    const fbErr = await fbRes.text();
+                    console.error(`❌ [DeliveryNode] Fallback text message also failed: ${fbErr}`);
+                }
             }
         } else {
             const data = await response.json() as any;
-            console.log(`[DeliveryNode] Message sent (${payload.type}): ${data.messages?.[0]?.id}`);
+            console.log(`✅ [DeliveryNode] Message sent (${payload.type}) to ${payload.to}: ${data.messages?.[0]?.id}`);
         }
     } catch (error) {
-        console.error("[DeliveryNode] Network error:", error);
+        console.error("❌ [DeliveryNode] Network error:", error);
     }
 }

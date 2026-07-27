@@ -9,7 +9,7 @@ if (fs.existsSync(backendEnvPath)) {
 }
 
 export const env = {
-    provider: process.env.MODEL_PROVIDER ?? "openai",
+    provider: process.env.MODEL_PROVIDER ?? "gemini",
 
     openaiKey: process.env.OPENAI_API_KEY,
 

@@ -29,7 +29,12 @@ function getRawModels() {
             fallbacks.push(
                 new ChatGoogleGenerativeAI({
                     apiKey: env.googleKey,
-                    model: "gemini-1.5-flash",
+                    model: "gemini-flash-latest",
+                    temperature: 0,
+                }),
+                new ChatGoogleGenerativeAI({
+                    apiKey: env.googleKey,
+                    model: "gemini-3-flash-preview",
                     temperature: 0,
                 })
             );

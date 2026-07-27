@@ -4,7 +4,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import "dotenv/config";
 import { createToolTapGraph } from "./graph/graph.js";
-import { parseMetaWebhook } from "./whatsapp/webhook-parser.js";
+import { parseIncomingWebhook } from "./whatsapp/webhook-parser.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { KnowledgeBaseStore, kbStore } from "./kb/kb-store.js";
 
@@ -12,8 +12,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(bodyParser.json({ limit: "50mb" }));
+app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
 
 // Create the LangGraph agent
 const graph = createToolTapGraph();
@@ -126,10 +128,21 @@ app.use((req: Request, res: Response, next) => {
 // Universal Webhook Handler (POST /webhook, POST /api/v1/.../webhook, or POST /)
 async function handleWebhookPost(req: Request, res: Response) {
     try {
-        // Return 200 fast to Meta / Twilio
-        res.status(200).send("EVENT_RECEIVED");
+        console.log(`\n📥 [Incoming Webhook] ${req.method} ${req.originalUrl || req.path}`);
+        console.log(`📦 [Body]:`, JSON.stringify(req.body));
 
-        const messages = parseMetaWebhook(req.body);
+        // Return 200 fast (TwiML XML for Twilio, EVENT_RECEIVED for Meta)
+        const isTwilio = (process.env.WHATSAPP_PROVIDER || "").toLowerCase() === "twilio" || req.body?.From || req.body?.AccountSid;
+        if (isTwilio) {
+            res.status(200).type("text/xml").send("<Response></Response>");
+        } else {
+            res.status(200).send("EVENT_RECEIVED");
+        }
+
+        const messages = parseIncomingWebhook(req.body);
+        if (messages.length === 0) {
+            console.warn("⚠️ [Webhook] Webhook received but no message extracted. Check payload structure.");
+        }
 
         for (const message of messages) {
             const { from, text, type, profileName } = message;
@@ -159,8 +172,8 @@ async function handleWebhookPost(req: Request, res: Response) {
                         configurable: { thread_id: threadId },
                     }
                 );
-            } catch (error) {
-                console.error("Agent invocation error:", error);
+            } catch (error: any) {
+                console.error("❌ [Server] Agent invocation error:", error?.stack || error?.message || error);
                 await sendFallbackText(from, "I'm sorry, an error occurred while processing your request.");
             }
         }
@@ -170,11 +183,10 @@ async function handleWebhookPost(req: Request, res: Response) {
 }
 
 // Register POST Webhook routes
-app.post("/webhook", handleWebhookPost);
-app.post("/", handleWebhookPost);
-app.use("/api/v1", (req: Request, res: Response, next) => {
-    if (req.method === "POST" && (req.path.endsWith("/webhook") || req.path.includes("whatsapp"))) {
-        return handleWebhookPost(req, res);
+app.use((req: Request, res: Response, next) => {
+    if (req.method === "POST") {
+        handleWebhookPost(req, res);
+        return;
     }
     next();
 });
@@ -185,7 +197,7 @@ async function sendFallbackText(to: string, text: string) {
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 
     try {
-        await fetch(`${apiUrl}/${phoneNumberId}/messages`, {
+        const res = await fetch(`${apiUrl}/${phoneNumberId}/messages`, {
             method: "POST",
             headers: {
                 Authorization: `Bearer ${apiToken}`,
@@ -199,13 +211,28 @@ async function sendFallbackText(to: string, text: string) {
                 text: { body: text },
             }),
         });
+        if (!res.ok) {
+            const txt = await res.text();
+            console.error(`❌ [Server Fallback] Meta API rejected fallback text (${res.status}): ${txt}`);
+        } else {
+            console.log(`✅ [Server Fallback] Fallback text sent to ${to}`);
+        }
     } catch (e) {
         console.error("[Fallback] Failed to send error message:", e);
     }
 }
 
 export function startServer() {
-    app.listen(port, () => {
+    const server = app.listen(port, () => {
         console.log(`🚀 ToolTap server listening on port ${port}`);
     });
+
+    // Keep Node process event loop alive indefinitely
+    if (process.stdin.setRawMode) {
+        process.stdin.resume();
+    } else {
+        setInterval(() => {}, 60000);
+    }
+
+    return server;
 }

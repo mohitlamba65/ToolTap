@@ -149,3 +149,54 @@ export function parseMetaWebhook(body: any): InboundMessage[] {
 
     return messages;
 }
+
+/**
+ * Parses incoming Twilio WhatsApp webhook payloads into normalized InboundMessage objects.
+ */
+export function parseTwilioWebhook(body: any): InboundMessage[] {
+    if (!body) return [];
+
+    const rawFrom = body.From || body.from;
+    const text = body.Body || body.body;
+
+    if (!rawFrom || text === undefined) return [];
+
+    const cleanFrom = String(rawFrom).replace("whatsapp:", "").replace("+", "").trim();
+    const profileName = body.ProfileName || body.profileName || "Twilio User";
+    const messageId = body.MessageSid || body.SmsSid || `tw_${Date.now()}`;
+
+    return [{
+        from: cleanFrom,
+        messageId,
+        timestamp: String(Math.floor(Date.now() / 1000)),
+        type: "text",
+        text: String(text),
+        profileName,
+    }];
+}
+
+/**
+ * Universal webhook parser — automatically distinguishes Meta vs Twilio payloads!
+ */
+export function parseIncomingWebhook(body: any): InboundMessage[] {
+    if (!body || typeof body !== "object") return [];
+
+    // Meta WhatsApp Cloud API
+    if (body.object === "whatsapp_business_account") {
+        return parseMetaWebhook(body);
+    }
+
+    // Twilio WhatsApp Webhook (Case-insensitive match for From & Body)
+    const fromKey = Object.keys(body).find(k => k.toLowerCase() === "from");
+    const bodyKey = Object.keys(body).find(k => k.toLowerCase() === "body");
+
+    if (fromKey && bodyKey && body[fromKey]) {
+        return parseTwilioWebhook({
+            ...body,
+            From: body[fromKey],
+            Body: body[bodyKey] || "",
+        });
+    }
+
+    return [];
+}
