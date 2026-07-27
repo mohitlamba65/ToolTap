@@ -2,51 +2,56 @@ import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { AgentGraphState } from "./state.js";
 import { agentNode, shouldContinue, formatterNode, toolNode } from "./nodes/agent.js";
 import { deliveryNode } from "./nodes/delivery.js";
+import { routerNode, shouldRouteToActionAgent } from "./nodes/router.js";
 
 /**
- * Creates the ToolTap Agent Graph using LangGraph.
+ * ToolTap LangGraph Agent Workflow
  * 
- * Architecture (inspired by the copywriting agent v2 pattern):
+ * Decoupled Architecture:
  * 
- *   START → agent → (tool_calls?) → tools → agent
- *                  → (final response) → formatter → delivery → END
- * 
- * Key features:
- * 1. Action tools (search, CRM, weather) are executed by the agent node
- * 2. The formatter node decides the WhatsApp message format (text, buttons, list, etc.)
- * 3. The delivery node constructs the API payload and sends it
- * 4. MemorySaver checkpointer enables human-in-the-loop:
- *    - Each user gets a persistent thread_id
- *    - When the agent needs input, the graph naturally ends at delivery
- *    - The next webhook message resumes the same thread with full context
+ *   START → router ──(RAG/Capabilities match)──> formatter ──> delivery ──> END
+ *              │
+ *              └──(Action Tool Request)──> agent ──(tool_calls)──> tools ──┐
+ *                                            │                             │
+ *                                            ▼                             │
+ *                                        formatter <───────────────────────┘
+ *                                            │
+ *                                            ▼
+ *                                         delivery ──> END
  */
 export function createToolTapGraph() {
     const workflow = new StateGraph(AgentGraphState)
         // Nodes
+        .addNode("router", routerNode)
         .addNode("agent", agentNode)
         .addNode("tools", toolNode)
         .addNode("formatter", formatterNode)
         .addNode("delivery", deliveryNode)
-        
-        // Edges
-        .addEdge(START, "agent")
-        
+
+        // Entry point is router
+        .addEdge(START, "router")
+
+        // Router branch: route directly to formatter if RAG/Capabilities handled query, else to agent
+        .addConditionalEdges("router", shouldRouteToActionAgent, {
+            formatter: "formatter",
+            agent: "agent",
+        })
+
         // After agent: route to tools (if tool call) or formatter (if final response)
         .addConditionalEdges("agent", shouldContinue, {
             tools: "tools",
             formatter: "formatter",
         })
-        
-        // After tools: loop back to agent for the next reasoning step
+
+        // After tools: loop back to agent
         .addEdge("tools", "agent")
-        
-        // After formatter: deliver the message
+
+        // After formatter: deliver via WhatsApp payload builder
         .addEdge("formatter", "delivery")
-        
-        // After delivery: end the graph (wait for next user message)
+
+        // After delivery: end turn
         .addEdge("delivery", END);
 
-    // Compile with checkpointer for stateful multi-turn conversations
     const checkpointer = new MemorySaver();
     return workflow.compile({ checkpointer });
 }

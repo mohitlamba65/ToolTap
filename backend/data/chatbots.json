@@ -1,0 +1,13 @@
+[
+  {
+    "id": "bot_u22k9nc",
+    "name": "prompt engineering bot",
+    "description": "",
+    "systemPrompt": "you are a prompt specialized agent, who know the latest best practices of prompt engineering.",
+    "triggerKeywords": [],
+    "kbCollectionName": "kb_prompt_engineering_bot",
+    "enabled": true,
+    "createdAt": "2026-07-27T12:05:51.454Z",
+    "updatedAt": "2026-07-27T12:05:51.454Z"
+  }
+]

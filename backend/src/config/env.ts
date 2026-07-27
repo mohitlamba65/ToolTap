@@ -1,6 +1,12 @@
 import dotenv from "dotenv";
+import path from "node:path";
+import fs from "node:fs";
 
 dotenv.config();
+const backendEnvPath = path.resolve("d:/Learnings/ToolTap/backend/.env");
+if (fs.existsSync(backendEnvPath)) {
+    dotenv.config({ path: backendEnvPath, override: true });
+}
 
 export const env = {
     provider: process.env.MODEL_PROVIDER ?? "openai",
@@ -19,7 +25,7 @@ export const env = {
 
     geminiModel:
         process.env.GEMINI_MODEL ??
-        "gemini-2.5-pro",
+        "gemini-3.5-flash",
 
     ollamaModel:
         process.env.OLLAMA_MODEL ??

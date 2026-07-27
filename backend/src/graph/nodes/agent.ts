@@ -1,4 +1,4 @@
-import { createModel } from "../../llm/provider.js";
+import { createModel, createModelWithTools } from "../../llm/provider.js";
 import { ToolRegistry } from "../../tools/registry.js";
 import { SYSTEM_PROMPT } from "../../agent/prompt.js";
 import type { AgentState } from "../state.js";
@@ -10,8 +10,8 @@ const model = createModel();
 const registry = new ToolRegistry();
 const tools = registry.getTools();
 
-// Bind action tools to the model
-const modelWithTools = model.bindTools(tools);
+// Bind action tools to the model with fallback support
+const modelWithTools = createModelWithTools(tools);
 
 // Export ToolNode for graph wiring
 export const toolNode = new ToolNode(tools);

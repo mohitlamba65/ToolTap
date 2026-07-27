@@ -1,0 +1,14 @@
+[
+  {
+    "id": "doc_ghamml7e",
+    "collectionName": "kb_prompt_engineering_bot",
+    "content": "# Prompt Engineering Best Practices\n\n## System Prompts\nUse clear persona definition and explicit constraints.\n\n## Few-Shot Prompting\nProvide 2-3 input output examples for deterministic tool output.",
+    "source": "prompt_guide.md",
+    "title": "Prompt Engineering Guide",
+    "category": "general",
+    "tags": [
+      "user_upload"
+    ],
+    "createdAt": "2026-07-27T12:26:53.513Z"
+  }
+]
