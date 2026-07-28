@@ -39,16 +39,16 @@ export async function routerNode(state: AgentState): Promise<Partial<AgentState>
         if (matched) {
             console.log(`🔀 [Router] Query matched chatbot '${bot.name}' (id: ${bot.id})`);
             try {
-                const ragResult = await kbStore.queryChatbot(bot.id, query);
-                let responseText = ragResult.answer;
+                // Build conversation context so the RAG model has memory of prior turns
+                const conversationContext = state.messages
+                    .slice(-6) // Last 3 human+ai pairs for context window efficiency
+                    .map((m) => `${m._getType() === "human" ? "User" : "Assistant"}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+                    .join("\n");
 
-                if (ragResult.sources.length > 0 && !ragResult.abstained) {
-                    responseText += `\n\n📌 *Sources & Provenance:*\n` +
-                        ragResult.sources.map((s) => `• ${s.title} (${s.heading_path}) [${s.score * 100}% confidence]`).join("\n");
-                }
+                const ragResult = await kbStore.queryChatbot(bot.id, query, conversationContext);
 
                 return {
-                    messages: [new AIMessage(responseText)],
+                    messages: [new AIMessage(ragResult.answer)],
                 };
             } catch (e) {
                 console.error(`[Router] RAG query failed for chatbot '${bot.id}':`, e);

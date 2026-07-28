@@ -1,9 +1,10 @@
 import { createModel, createModelWithTools } from "../../llm/provider.js";
 import { ToolRegistry } from "../../tools/registry.js";
-import { SYSTEM_PROMPT } from "../../agent/prompt.js";
+import { AGENT_PROMPT } from "../../agent/prompts/agent.prompt.js";
+import { FORMATTER_PROMPT } from "../../agent/prompts/formatter.prompt.js";
 import type { AgentState } from "../state.js";
 import type { ResponseIntent } from "../types.js";
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 const model = createModel();
@@ -16,37 +17,7 @@ const modelWithTools = createModelWithTools(tools);
 // Export ToolNode for graph wiring
 export const toolNode = new ToolNode(tools);
 
-/**
- * FORMAT_INSTRUCTION appended to the LLM's last response to get
- * a structured ResponseIntent. This is a second-pass call.
- */
-const FORMAT_INSTRUCTION = `
-Based on the response you just generated, decide the best WhatsApp message format.
-Return ONLY valid JSON matching this schema (no markdown, no explanation):
-
-{
-  "messageType": "text" | "buttons" | "list" | "image" | "document",
-  "text": "The main body text of your response",
-  "header": "Optional short header (max 60 chars)",
-  "footer": "Optional footer text (max 60 chars)",
-  "buttons": [{"id": "unique_id", "title": "Button Label (max 20 chars)"}],
-  "listButtonText": "View Options",
-  "listSections": [{"title": "Section", "rows": [{"id": "row_id", "title": "Row Title", "description": "Description"}]}],
-  "mediaUrl": "https://...",
-  "caption": "Image/doc caption",
-  "filename": "file.pdf"
-}
-
-Rules:
-- Use "buttons" (max 3) when presenting 2-3 clear choices to the user.
-- Use "list" when presenting 4-10 options organized in sections.
-- Use "image" when your response includes an image URL.
-- Use "document" when your response references a downloadable file.
-- Use "text" for all other responses (most common).
-- Only include the fields relevant to the chosen messageType.
-- BUTTONS: max 3 buttons, each title max 20 chars, each id must be unique.
-- LIST: each section title max 24 chars, each row title max 24 chars.
-`;
+// FORMAT_INSTRUCTION is now fully encoded in FORMATTER_PROMPT (formatter.prompt.ts)
 
 /**
  * Agent Node: The core reasoning node.
@@ -57,7 +28,7 @@ Rules:
  */
 export async function agentNode(state: AgentState): Promise<Partial<AgentState>> {
     const response = await modelWithTools.invoke([
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: AGENT_PROMPT },
         ...state.messages,
     ]);
 
@@ -84,28 +55,26 @@ export function shouldContinue(state: AgentState): "tools" | "formatter" {
  */
 export async function formatterNode(state: AgentState): Promise<Partial<AgentState>> {
     const lastMessage = state.messages[state.messages.length - 1];
+    
+    if (!lastMessage) {
+        return { responseIntent: { messageType: "text", text: "Error: No message to format." } };
+    }
+
     const responseText = typeof lastMessage.content === "string"
         ? lastMessage.content
         : JSON.stringify(lastMessage.content);
 
-    // For very short responses, skip the format decision and use text
-    if (responseText.length < 80) {
-        const intent: ResponseIntent = {
-            messageType: "text",
-            text: responseText,
-        };
-        return { responseIntent: intent };
-    }
+    // Pass the text to the LLM to decide the WhatsApp format
 
     try {
         const formatResponse = await model.invoke([
             {
                 role: "system",
-                content: "You are a WhatsApp message format selector. You ONLY output valid JSON. No explanations.",
+                content: FORMATTER_PROMPT,
             },
             {
                 role: "user",
-                content: `Here is the agent's response to format for WhatsApp:\n\n"""${responseText}"""\n\n${FORMAT_INSTRUCTION}`,
+                content: `Format this response for WhatsApp:\n\n"""${responseText}"""`,
             },
         ]);
 

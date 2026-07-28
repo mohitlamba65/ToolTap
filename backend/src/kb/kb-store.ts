@@ -4,6 +4,7 @@ import type { CustomChatbot, RAGResult } from "../rag/types.js";
 import { StructureAwareChunker } from "../rag/chunker.ts";
 import { globalQdrantManager } from "../rag/qdrant.js";
 import { SemanticRAGPipeline } from "../rag/pipeline.js";
+import { RAG_PROMPT } from "../agent/prompts/rag.prompt.js";
 
 export interface StoredDocument {
     id: string;
@@ -259,16 +260,19 @@ Powered by Brevo REST API. Supports sending transactional HTML emails and tracki
     /**
      * Executes RAG query for a specific chatbot.
      */
-    async queryChatbot(chatbotId: string, query: string): Promise<RAGResult> {
+    async queryChatbot(chatbotId: string, query: string, conversationContext?: string): Promise<RAGResult> {
         const bot = this.chatbots.get(chatbotId);
         if (!bot) {
             throw new Error(`Chatbot '${chatbotId}' not found.`);
         }
 
+        // Compose the RAG system prompt: base policy + chatbot-specific persona
+        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}${conversationContext ? `\n\n## Conversation So Far\n${conversationContext}` : ""}`;
+
         return this.ragPipeline.queryKnowledgeBase(
             bot.kbCollectionName,
             query,
-            bot.systemPrompt
+            ragSystemPrompt
         );
     }
 }
