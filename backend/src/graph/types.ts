@@ -28,17 +28,29 @@ export interface ListSection {
  * The formatter node reads this and constructs the correct API payload.
  */
 export interface ResponseIntent {
-    messageType: "text" | "buttons" | "list" | "image" | "document";
-    text: string;                // Body text (always required)
+    messageType:
+        | "text"
+        | "buttons"
+        | "list"
+        | "image"
+        | "document"
+        | "video"
+        | "audio"
+        | "sticker"
+        | "location_request"  // Ask user to share their location
+        | "reaction";         // React to a message
+    text: string;                // Body text (required for most types)
     header?: string;             // Optional header for interactive messages
     footer?: string;             // Optional footer text
     buttons?: ButtonOption[];    // For quick reply buttons (max 3)
     listButtonText?: string;     // Button label for list messages (e.g. "View Options")
     listSections?: ListSection[];// For list messages (>3 options)
-    mediaUrl?: string;           // For image/document messages
+    mediaUrl?: string;           // For image/video/audio/document/sticker messages
     mediaId?: string;            // Meta media ID alternative
     caption?: string;            // Caption for media messages
     filename?: string;           // Filename for document messages
+    reactionEmoji?: string;      // Emoji for reaction messages
+    reactionMessageId?: string;  // Message ID to react to
 }
 
 /**
@@ -120,12 +132,77 @@ export interface WhatsAppDocumentPayload {
     };
 }
 
+export interface WhatsAppVideoPayload {
+    messaging_product: "whatsapp";
+    recipient_type: "individual";
+    to: string;
+    type: "video";
+    video: {
+        link?: string;
+        id?: string;
+        caption?: string;
+    };
+}
+
+export interface WhatsAppAudioPayload {
+    messaging_product: "whatsapp";
+    recipient_type: "individual";
+    to: string;
+    type: "audio";
+    audio: {
+        link?: string;
+        id?: string;
+    };
+}
+
+export interface WhatsAppStickerPayload {
+    messaging_product: "whatsapp";
+    recipient_type: "individual";
+    to: string;
+    type: "sticker";
+    sticker: {
+        link?: string;
+        id?: string;
+    };
+}
+
+/**
+ * WhatsApp interactive location_request message
+ * Prompts the user to share their live location via a native button
+ */
+export interface WhatsAppLocationRequestPayload {
+    messaging_product: "whatsapp";
+    recipient_type: "individual";
+    to: string;
+    type: "interactive";
+    interactive: {
+        type: "location_request_message";
+        body: { text: string };
+        action: { name: "send_location" };
+    };
+}
+
+export interface WhatsAppReactionPayload {
+    messaging_product: "whatsapp";
+    to: string;
+    type: "reaction";
+    reaction: {
+        message_id: string;
+        emoji: string;
+    };
+}
+
 export type WhatsAppPayload =
     | WhatsAppTextPayload
     | WhatsAppButtonsPayload
     | WhatsAppListPayload
     | WhatsAppImagePayload
-    | WhatsAppDocumentPayload;
+    | WhatsAppDocumentPayload
+    | WhatsAppVideoPayload
+    | WhatsAppAudioPayload
+    | WhatsAppStickerPayload
+    | WhatsAppLocationRequestPayload
+    | WhatsAppReactionPayload;
 
 /**
  * Normalized inbound message from webhook
@@ -134,7 +211,7 @@ export interface InboundMessage {
     from: string;
     messageId: string;
     timestamp: string;
-    type: "text" | "button_reply" | "list_reply" | "image" | "audio" | "document" | "video" | "location" | "contacts" | "reaction" | "unsupported";
+    type: "text" | "button_reply" | "list_reply" | "image" | "audio" | "document" | "video" | "location" | "contacts" | "reaction" | "sticker" | "unsupported";
     text?: string;
     buttonReply?: { id: string; title: string };
     listReply?: { id: string; title: string; description?: string };
@@ -145,4 +222,6 @@ export interface InboundMessage {
     filename?: string;
     location?: { latitude: number; longitude: number; name?: string; address?: string };
     profileName?: string;
+    isVoiceNote?: boolean; // true when audio type is a voice recording
 }
+

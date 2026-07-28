@@ -132,7 +132,10 @@ export function parseMetaWebhook(body: any): InboundMessage[] {
                         break;
 
                     case "sticker":
-                        base.type = "unsupported";
+                        base.type = "sticker";
+                        base.mediaId = msg.sticker?.id;
+                        base.mediaUrl = msg.sticker?.url;
+                        base.mimeType = msg.sticker?.mime_type;
                         base.text = "[User sent a sticker]";
                         break;
 

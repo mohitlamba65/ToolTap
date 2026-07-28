@@ -117,7 +117,7 @@ app.use((req: Request, res: Response, next) => {
         const challenge = req.query["hub.challenge"];
         const token = req.query["hub.verify_token"];
 
-        if (mode === "subscribe" && token === verifyToken) {
+        if (mode === "subscribe" && token === verifyToken && typeof challenge === "string") {
             console.log(`✅ Webhook verified successfully for path: ${req.path}`);
             return res.status(200).send(challenge);
         }
@@ -159,6 +159,21 @@ async function handleWebhookPost(req: Request, res: Response) {
                 userContent = `[User selected from list: "${message.listReply.title}" (id: ${message.listReply.id})]`;
             } else if (type === "location" && message.location) {
                 userContent = `User shared their location: ${message.location.name || ""} ${message.location.address || ""} (lat: ${message.location.latitude}, lon: ${message.location.longitude})`;
+            } else if (type === "audio" && (message.mediaUrl || message.mediaId)) {
+                // Voice transcription: fetch audio from Meta and transcribe via Gemini
+                const audioUrl = message.mediaUrl || (message.mediaId ? await fetchMetaMediaUrl(message.mediaId) : null);
+                if (audioUrl) {
+                    const transcript = await transcribeAudio(audioUrl);
+                    if (transcript) {
+                        console.log(`🎙️ [Transcription] Voice message transcribed: "${transcript}"`);
+                        userContent = transcript;
+                    } else {
+                        userContent = "[User sent a voice message that could not be transcribed. Please ask them to type their message instead.]";
+                    }
+                }
+            } else if (type === "sticker") {
+                // Acknowledge sticker warmly and continue
+                userContent = "[User sent a sticker — acknowledge it warmly and continue the conversation]";
             }
 
             try {
@@ -222,13 +237,93 @@ async function sendFallbackText(to: string, text: string) {
     }
 }
 
+/**
+ * Resolves a Meta media ID to a direct download URL using the Media API.
+ */
+async function fetchMetaMediaUrl(mediaId: string): Promise<string | null> {
+    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
+    const apiUrl = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
+    try {
+        const res = await fetch(`${apiUrl}/${mediaId}`, {
+            headers: { Authorization: `Bearer ${apiToken}` },
+        });
+        if (!res.ok) return null;
+        const data = await res.json() as any;
+        return data.url || null;
+    } catch (e) {
+        console.error("[fetchMetaMediaUrl] Failed to resolve media URL:", e);
+        return null;
+    }
+}
+
+/**
+ * Downloads audio from Meta CDN and transcribes it using Gemini multimodal.
+ * Supports audio/ogg (WhatsApp voice notes), audio/mpeg, audio/mp4.
+ */
+async function transcribeAudio(audioUrl: string): Promise<string | null> {
+    const googleKey = process.env.GOOGLE_API_KEY || "";
+    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
+    // Use the same model that's configured in .env (e.g. gemini-2.0-flash or gemini-3.5-flash)
+    const transcriptionModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+
+    if (!googleKey) {
+        console.warn("[Transcription] GOOGLE_API_KEY not set — cannot transcribe voice.");
+        return null;
+    }
+    try {
+        // Download audio bytes from Meta CDN (requires auth header)
+        const audioRes = await fetch(audioUrl, {
+            headers: { Authorization: `Bearer ${apiToken}` },
+        });
+        if (!audioRes.ok) {
+            console.error(`[Transcription] Failed to download audio (${audioRes.status})`);
+            return null;
+        }
+        const audioBuffer = await audioRes.arrayBuffer();
+        const audioBase64 = Buffer.from(audioBuffer).toString("base64");
+        // WhatsApp voice notes are always audio/ogg; use that as fallback
+        const rawContentType = audioRes.headers.get("content-type") || "audio/ogg";
+        const mimeType = rawContentType.split(";")[0].trim();
+
+        // Transcribe using Gemini multimodal via REST (avoids SDK version issues)
+        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${transcriptionModel}:generateContent?key=${googleKey}`;
+        const body = {
+            contents: [{
+                parts: [
+                    { inlineData: { mimeType, data: audioBase64 } },
+                    { text: "Transcribe the audio message exactly as spoken. Return only the transcribed text, nothing else." },
+                ],
+            }],
+        };
+
+        const geminiRes = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+
+        if (!geminiRes.ok) {
+            const errText = await geminiRes.text();
+            console.error(`[Transcription] Gemini API error (${geminiRes.status}): ${errText}`);
+            return null;
+        }
+
+        const geminiData = await geminiRes.json() as any;
+        const transcript = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        return transcript || null;
+    } catch (e) {
+        console.error("[Transcription] Audio transcription failed:", e);
+        return null;
+    }
+}
+
 export function startServer() {
     const server = app.listen(port, () => {
         console.log(`🚀 ToolTap server listening on port ${port}`);
     });
 
     // Keep Node process event loop alive indefinitely
-    if (process.stdin.setRawMode) {
+    if (typeof process.stdin.setRawMode === "function") {
         process.stdin.resume();
     } else {
         setInterval(() => {}, 60000);

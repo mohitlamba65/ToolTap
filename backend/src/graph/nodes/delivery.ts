@@ -7,6 +7,11 @@ import type {
     WhatsAppListPayload,
     WhatsAppImagePayload,
     WhatsAppDocumentPayload,
+    WhatsAppVideoPayload,
+    WhatsAppAudioPayload,
+    WhatsAppStickerPayload,
+    WhatsAppLocationRequestPayload,
+    WhatsAppReactionPayload,
 } from "../types.js";
 
 /**
@@ -111,6 +116,16 @@ function buildPayload(intent: ResponseIntent, to: string): WhatsAppPayload {
             return buildImagePayload(intent, to);
         case "document":
             return buildDocumentPayload(intent, to);
+        case "video":
+            return buildVideoPayload(intent, to);
+        case "audio":
+            return buildAudioPayload(intent, to);
+        case "sticker":
+            return buildStickerPayload(intent, to);
+        case "location_request":
+            return buildLocationRequestPayload(intent, to);
+        case "reaction":
+            return buildReactionPayload(intent, to);
         case "text":
         default:
             return buildTextPayload(intent, to);
@@ -202,6 +217,74 @@ function buildDocumentPayload(intent: ResponseIntent, to: string): WhatsAppDocum
             ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
             ...(intent.caption ? { caption: intent.caption.slice(0, 1024) } : {}),
             ...(intent.filename ? { filename: intent.filename } : {}),
+        },
+    };
+}
+
+function buildVideoPayload(intent: ResponseIntent, to: string): WhatsAppVideoPayload {
+    return {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "video",
+        video: {
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.caption ? { caption: intent.caption.slice(0, 1024) } : {}),
+        },
+    };
+}
+
+function buildAudioPayload(intent: ResponseIntent, to: string): WhatsAppAudioPayload {
+    return {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "audio",
+        audio: {
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+        },
+    };
+}
+
+function buildStickerPayload(intent: ResponseIntent, to: string): WhatsAppStickerPayload {
+    return {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "sticker",
+        sticker: {
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+        },
+    };
+}
+
+/**
+ * Sends a native WhatsApp location_request_message.
+ * This renders a "Share Location" button inside WhatsApp — the user taps it
+ * and their GPS pin is sent back as a location message.
+ */
+function buildLocationRequestPayload(intent: ResponseIntent, to: string): WhatsAppLocationRequestPayload {
+    return {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "interactive",
+        interactive: {
+            type: "location_request_message",
+            body: { text: intent.text.slice(0, 1024) },
+            action: { name: "send_location" },
+        },
+    };
+}
+
+function buildReactionPayload(intent: ResponseIntent, to: string): WhatsAppReactionPayload {
+    return {
+        messaging_product: "whatsapp",
+        to,
+        type: "reaction",
+        reaction: {
+            message_id: intent.reactionMessageId || "",
+            emoji: intent.reactionEmoji || "👍",
         },
     };
 }
