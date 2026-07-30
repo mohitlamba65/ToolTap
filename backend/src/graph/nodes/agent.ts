@@ -95,21 +95,35 @@ export async function formatterNode(state: AgentState): Promise<Partial<AgentSta
     // Unwrap LangChain MessageContent (string | array of content blocks | object)
     const responseText = extractTextFromContent(lastMessage.content);
 
-    // ── Stage 1: Zero-cost fast-path ─────────────────────────────────────────
+    // ── Stage 1: Fast-path heuristic ─────────────────────────────────────────
+    // Skip LLM formatter ONLY for very short, single-paragraph plain conversational text.
+    // Send to LLM formatter if there are bullet points, numbered items, options, URLs,
+    // discovery questions, or structured options to ensure interactive button/list delivery.
     const lower = responseText.toLowerCase();
+
     const hasMediaUrl    = /https?:\/\/[^\s]+\.(jpg|jpeg|png|webp|gif|mp4|pdf|docx|xlsx|3gpp)(\?[^\s]*)?/i.test(responseText);
     const hasAnyUrl      = /https?:\/\/[^\s]+/.test(responseText);
-    const hasListItems   = /(?:^|\n)\s*(?:[1-9][.)]\s|\*\s|-\s|•\s)/.test(responseText);
-    const hasButtonWords = lower.includes("select an option") || lower.includes("choose one")
-        || lower.includes("please choose") || lower.includes("would you like to")
-        || lower.includes("what would you like");
     const hasLocation    = lower.includes("share your location") || lower.includes("nearest showroom")
-        || lower.includes("send your location") || lower.includes("nearby");
+        || lower.includes("send your location") || lower.includes("share location");
 
-    if (!hasMediaUrl && !hasAnyUrl && !hasListItems && !hasButtonWords && !hasLocation) {
-        console.log(`⚡ [Formatter] Fast-path: plain text, skipping LLM pass.`);
+    // Any bullet points or numbered lists (e.g. 1., 2., •, -, *)
+    const hasListOrBullets = /(?:^|\n)\s*(?:[1-9][.)]|\*|-|•)\s+/.test(responseText);
+
+    // Interactive/choice/option indicators
+    const hasInteractiveSignals =
+        lower.includes("would you like") || lower.includes("what would you like") ||
+        lower.includes("choose") || lower.includes("select") ||
+        lower.includes("pick") || lower.includes("prefer") ||
+        lower.includes("want to explore") || lower.includes("explore further") ||
+        lower.includes("what's next") || lower.includes("next steps") ||
+        lower.includes("options") || lower.includes("question") ||
+        lower.includes("discovery") || lower.includes("following");
+
+    if (!hasMediaUrl && !hasAnyUrl && !hasLocation && !hasListOrBullets && !hasInteractiveSignals) {
+        console.log(`⚡ [Formatter] Fast-path: short plain text, skipping LLM pass.`);
         return { responseIntent: { messageType: "text", text: responseText } };
     }
+
 
     // ── Stage 2: JSON-mode LLM pass — provider-agnostic structured output ─────
     // withStructuredOutput has incompatible schema rules between Gemini and OpenAI.

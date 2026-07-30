@@ -53,7 +53,12 @@ Return ONLY this JSON (no markdown, no code fences, no explanation):
 - **buttons**: Max 3 buttons. Each title MUST be ≤20 characters. Each id must be unique slug without spaces (e.g. "btn_1", "opt_drive").
 - **list**: Each section title max 24 chars. Each row title max 24 chars. Each row description max 72 chars. Max 10 rows total.
 - **image**: Extract image URL to "mediaUrl". Do NOT leave raw image URL in "text".
-- **PROACTIVE CONVERSION**: If the text contains bullet points (*, -, •) or numbered items (1., 2., 3.), DO NOT keep them as plain text paragraphs — convert them into "buttons" (if 1-3 items) or "list" (if 4+ items)!
+- **WHATSAPP BOLDING**: WhatsApp uses single asterisk *bold* for bold text. NEVER output double asterisks **bold**.
+- **PROACTIVE CONVERSION (MANDATORY)**: Users hate giant blocks of plain text!
+  - If the text presents 1–3 choices, options, discovery questions, or follow-ups → ALWAYS convert to "buttons"!
+  - If the text presents 4–10 options, recommendations, pillars, or discovery questions → ALWAYS convert to a "list" menu!
+  - Do NOT keep options, questions, or bullet lists as plain text paragraphs — extract the body summary into "text" and place the choices into interactive "buttons" or "listSections"!
+
 
 ## CRITICAL: Button Title Length ≤20 Characters
 

@@ -212,22 +212,36 @@ export class KnowledgeBaseStore {
 
     /**
      * Executes RAG query for a specific chatbot.
+     *
+     * @param chatbotId - The chatbot to query
+     * @param query - The clean semantic query (already extracted from button/list reply wrappers)
+     * @param conversationContext - Recent conversation turns (for session continuity)
+     * @param previousAnswers - Summary of previously given AI answers (for deduplication)
      */
-    async queryChatbot(chatbotId: string, query: string, conversationContext?: string): Promise<RAGResult> {
+    async queryChatbot(
+        chatbotId: string,
+        query: string,
+        conversationContext?: string,
+        previousAnswers?: string
+    ): Promise<RAGResult> {
         const bot = this.chatbots.get(chatbotId);
         if (!bot) {
             throw new Error(`Chatbot '${chatbotId}' not found.`);
         }
 
         // Compose the RAG system prompt: base policy + chatbot-specific persona
-        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}${conversationContext ? `\n\n## Conversation So Far\n${conversationContext}` : ""}`;
+        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}`;
 
         return this.ragPipeline.queryKnowledgeBase(
             bot.kbCollectionName,
             query,
-            ragSystemPrompt
+            ragSystemPrompt,
+            0.1,             // similarityThreshold
+            previousAnswers, // deduplication: what was already told to the user
+            conversationContext // recent conversation turns
         );
     }
+
 }
 
 export const kbStore = new KnowledgeBaseStore();

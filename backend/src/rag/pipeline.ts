@@ -28,12 +28,22 @@ export class SemanticRAGPipeline {
 
     /**
      * Executes full Semantic RAG pipeline for a specific collection / knowledge base.
+     *
+     * @param collectionName  - Qdrant collection to search
+     * @param userQuery       - The clean semantic query (already extracted from button/list reply)
+     * @param systemPromptOverride - Optional custom system prompt for this bot
+     * @param similarityThreshold - Minimum vector similarity score (default 0.1)
+     * @param previousAnswers - Stringified summary of previously given AI answers in this session.
+     *                         Used to avoid repeating the same content on follow-up turns.
+     * @param conversationHistory - Recent conversation turns for session context
      */
     async queryKnowledgeBase(
         collectionName: string,
         userQuery: string,
         systemPromptOverride?: string,
-        similarityThreshold = 0.1
+        similarityThreshold = 0.1,
+        previousAnswers?: string,
+        conversationHistory?: string
     ): Promise<RAGResult> {
         // 1. Query Analysis
         const analysis = await this.analyzeQuery(userQuery);
@@ -70,15 +80,26 @@ export class SemanticRAGPipeline {
         // 4. Context Builder with Provenance
         const contextText = this.buildContextWithProvenance(reranked);
 
-        // 5. Generation via LangChain LCEL RunnableSequence
-        const systemPrompt = systemPromptOverride || DEFAULT_RAG_SYSTEM_PROMPT;
+        // 5. Build System Prompt — inject anti-repetition block if prior answers exist
+        const baseSystemPrompt = systemPromptOverride || DEFAULT_RAG_SYSTEM_PROMPT;
 
+        let systemPrompt = baseSystemPrompt;
+
+        if (previousAnswers && previousAnswers.trim().length > 0) {
+            systemPrompt += `\n\n---\nCONVERSATION DEDUPLICATION (CRITICAL):\nThe following answers were ALREADY given to the user in this session. Do NOT repeat this information:\n\n${previousAnswers}\n\nYou MUST:\n- Provide NEW information, a DEEPER explanation, or a DIFFERENT aspect of the topic.\n- If you have covered all available information on this topic, explicitly tell the user: "I've shared everything available on this topic. Would you like to explore a related subject?"\n- Never summarise or paraphrase what was already said above.\n---`;
+        }
+
+        if (conversationHistory && conversationHistory.trim().length > 0) {
+            systemPrompt += `\n\nRECENT CONVERSATION CONTEXT:\n${conversationHistory}`;
+        }
+
+        // 6. Generation via LangChain LCEL RunnableSequence
         const chain = RunnableSequence.from([
             async (input: { context: string; query: string }) => [
                 { role: "system", content: systemPrompt },
                 {
                     role: "user",
-                    content: `RETRIEVED KNOWLEDGE BASE CONTEXT:\n\n${input.context}\n\nUSER QUERY:\n${input.query}\n\nProvide a precise, grounded response following all citation and evidence rules.`,
+                    content: `RETRIEVED KNOWLEDGE BASE CONTEXT:\n\n${input.context}\n\nUSER QUERY:\n${input.query}\n\nProvide a precise, grounded response following all citation and evidence rules. Do not repeat information already given in CONVERSATION DEDUPLICATION section.`,
                 },
             ],
             this.llm,
@@ -128,10 +149,46 @@ ${item.chunk.text}
 const DEFAULT_RAG_SYSTEM_PROMPT = `
 You are an authoritative enterprise AI assistant. You answer questions strictly using the provided RETRIEVED KNOWLEDGE BASE CONTEXT.
 
-STRICT GENERATION RULES:
-1. Answer ONLY from the retrieved context provided. Do NOT use outside knowledge.
-2. Cite your source for every claim made (e.g. "[Source 1: Section Path]").
-3. If the retrieved evidence is insufficient or ambiguous to answer the query, explicitly state that you abstain due to lack of evidence in the knowledge base.
-4. Never speculate, hallucinate, or fabricate policies, numbers, or procedures.
-5. Format your output cleanly for readability on mobile chat / WhatsApp.
+## STRICT ACCURACY RULES
+1. Answer ONLY from the retrieved context. Do NOT use outside knowledge.
+2. Cite sources inline (e.g., "[Source 1]") for key facts.
+3. If evidence is insufficient, say: "I don't have enough information on this in my knowledge base."
+4. Never fabricate policies, numbers, or procedures.
+
+## WHATSAPP RESPONSE FORMAT (MANDATORY)
+Structure every response for mobile chat readability:
+
+*CRITICAL BOLDING RULE*: WhatsApp uses single asterisk *bold* for bolding text. NEVER use double asterisks **bold**, as double asterisks result in literal asterisks displayed on user screens!
+
+Use 1-2 relevant professional emojis to open sections — NOT decorative emoji spam.
+Keep paragraphs short (2-3 sentences max). Use line breaks liberally.
+
+*Professional emoji palette to use (pick 1-2 relevant ones per response):*
+📋 for frameworks/processes, 🎯 for goals/objectives, 💡 for insights/tips,
+📊 for metrics/KPIs, 🔍 for analysis, ⚙️ for operations, 🤝 for partnerships/collaboration,
+✅ for achievements/completions, 📈 for performance/growth, 🛡️ for governance/compliance,
+🔗 for integrations, 📌 for key points. 
+Avoid: 🎉🥳😂❤️ and other casual/emotional emojis.
+
+## DISCOVERY & OPTIONS RULE (MANDATORY)
+When asked for discovery questions, options, key pillars, recommendations, or next steps:
+- Keep the introduction short (1-2 concise sentences max).
+- Present options or questions as a clean numbered list (1., 2., 3., etc.).
+- Keep option titles short (≤20 chars) so they can be seamlessly rendered as interactive WhatsApp buttons or list pickers!
+
+## FOLLOW-UP OPTIONS (MANDATORY — include at the end of EVERY response)
+After your main answer, ALWAYS add 2-3 short follow-up options to continue the conversation.
+Format them as a numbered list where each option is ≤20 chars (for WhatsApp button labels):
+
+*Want to explore further?*
+1. [Short option ≤20 chars]
+2. [Short option ≤20 chars]
+3. [Short option ≤20 chars]
+
+*Good option examples:* "View KPIs", "Governance model", "Implementation steps", "Case study", "Cost breakdown", "Next steps", "Learn more", "Best practices"
+*Bad option examples:* "Tell me more about the managed services framework implementation" (too long)
+
+This ensures every response ends with interactive buttons — keeping the conversation flowing.
 `;
+
+

@@ -15,6 +15,19 @@ import type {
 } from "../types.js";
 
 /**
+ * Ensures standard Markdown (e.g. **bold**, ### Header) is converted to WhatsApp syntax.
+ * WhatsApp uses *bold* (single asterisk), _italic_ (single underscore).
+ * Double asterisks **text** result in literal asterisks showing around text on WhatsApp screens.
+ */
+export function sanitizeWhatsAppMarkdown(text: string | undefined): string {
+    if (!text) return "";
+    return text
+        .replace(/^#{1,6}\s+(.+)$/gm, "*$1*")
+        .replace(/\*\*(.*?)\*\*/g, "*$1*")
+        .replace(/__(.*?)__/g, "_$1_");
+}
+
+/**
  * Delivery Node: Converts the ResponseIntent into a WhatsApp API payload
  * and sends it via the WhatsApp Cloud API.
  * 
@@ -27,6 +40,26 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
     if (!responseIntent || !recipientPhone) {
         console.error("[DeliveryNode] Missing responseIntent or recipientPhone");
         return {};
+    }
+
+    // Sanitize all text fields for WhatsApp Markdown syntax (**bold** -> *bold*)
+    if (responseIntent.text) responseIntent.text = sanitizeWhatsAppMarkdown(responseIntent.text);
+    if (responseIntent.header) responseIntent.header = sanitizeWhatsAppMarkdown(responseIntent.header);
+    if (responseIntent.footer) responseIntent.footer = sanitizeWhatsAppMarkdown(responseIntent.footer);
+    if (responseIntent.caption) responseIntent.caption = sanitizeWhatsAppMarkdown(responseIntent.caption);
+    if (responseIntent.buttons) {
+        responseIntent.buttons.forEach((b) => {
+            if (b.title) b.title = sanitizeWhatsAppMarkdown(b.title);
+        });
+    }
+    if (responseIntent.listSections) {
+        responseIntent.listSections.forEach((s) => {
+            if (s.title) s.title = sanitizeWhatsAppMarkdown(s.title);
+            s.rows.forEach((r) => {
+                if (r.title) r.title = sanitizeWhatsAppMarkdown(r.title);
+                if (r.description) r.description = sanitizeWhatsAppMarkdown(r.description);
+            });
+        });
     }
 
     const provider = (process.env.WHATSAPP_PROVIDER || "meta").toLowerCase();
@@ -42,6 +75,7 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
 
     return { whatsappPayload: payload };
 }
+
 
 function extractTextFromIntent(intent: ResponseIntent): string {
     let text = intent.text || "";
