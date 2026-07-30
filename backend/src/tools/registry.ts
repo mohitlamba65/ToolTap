@@ -1,6 +1,12 @@
 import { createCalendarEventTool } from "./calendar/create-event.js";
 import { crmListLeadsTool, crmAddLeadTool, crmUpdateLeadTool, crmDeleteLeadTool } from "./crm/crm-agent.js";
-import { sendEmailBrevoTool, getEmailsBrevoTool } from "./email/send-email-brevo.js";
+import {
+    sendEmailMailgunTool,
+    getEmailsMailgunTool,
+    getStoredEmailMailgunTool,
+    getSendingQueuesMailgunTool,
+    deleteScheduledMailgunTool,
+} from "./email/send-email-mailgun.js";
 import { tavilySearchTool } from "./web-search/tavily-search.js";
 import { weatherTool } from "./weather.ts/weather.js";
 
@@ -12,9 +18,12 @@ export class ToolRegistry {
         // Weather
         weatherTool,
 
-        // Email (Brevo)
-        sendEmailBrevoTool,
-        getEmailsBrevoTool,
+        // Email (Mailgun Engine)
+        sendEmailMailgunTool,
+        getEmailsMailgunTool,
+        getStoredEmailMailgunTool,
+        getSendingQueuesMailgunTool,
+        deleteScheduledMailgunTool,
 
         // CRM (Database + HubSpot)
         crmListLeadsTool,

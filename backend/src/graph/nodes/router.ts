@@ -47,7 +47,7 @@ export async function routerNode(state: AgentState): Promise<Partial<AgentState>
             .map((m) => `${m._getType() === "human" ? "User" : "Assistant"}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
             .join("\n");
 
-        if (matchedBots.length === 1) {
+        if (matchedBots.length === 1 && matchedBots[0]) {
             // Single match — invoke directly, no Promise overhead
             const bot = matchedBots[0];
             console.log(`🔀 [Router] Query matched chatbot '${bot.name}' (id: ${bot.id})`);
@@ -105,7 +105,7 @@ function generateCapabilitiesOverview(): string {
     text += `⚡ *Action Tools (Real-Time Execution)*:\n`;
     text += `1. 🌐 *Web Search*: Real-time internet search via Tavily API.\n`;
     text += `2. ☀️ *Weather Forecast*: Live global weather updates.\n`;
-    text += `3. ✉️ *Email Service*: Send transactional emails & view history via Brevo.\n`;
+    text += `3. ✉️ *Email Service*: Send, track, retrieve emails & manage queues via Mailgun Engine.\n`;
     text += `4. 🗃️ *CRM Agent*: Perform lead CRUD on HubSpot or Postgres Database.\n`;
     text += `5. 📅 *Calendar*: Create and manage scheduling events.\n\n`;
 

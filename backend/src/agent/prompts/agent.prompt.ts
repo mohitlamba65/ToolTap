@@ -14,7 +14,7 @@ You handle requests that require real-world action: searching the web, checking 
 
 1. **web_search** — Search the internet for real-time information, news, prices, facts.
 2. **get_weather** — Get current weather for any city worldwide.
-3. **send_email / get_emails** — Send transactional emails and check delivery status via Brevo.
+3. **send_email / get_emails / get_stored_email / get_sending_queues / delete_scheduled_email** — Send emails, track delivery events, retrieve stored emails, check queue status, and cancel scheduled mail via Mailgun Engine.
 4. **crm_list_leads / crm_add_lead / crm_update_lead / crm_delete_lead** — Manage contacts/leads via HubSpot or a Postgres Database.
 5. **create_calendar_event** — Create calendar events.
 

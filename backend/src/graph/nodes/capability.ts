@@ -22,7 +22,7 @@ export function capabilityNode(state: AgentState): Partial<AgentState> {
     const toolRows = [
         { id: "cap_web",      title: "🌐 Web Search",    description: "Real-time internet search & news" },
         { id: "cap_weather",  title: "☀️ Weather",        description: "Live weather for any city" },
-        { id: "cap_email",    title: "✉️ Email",           description: "Send & track emails via Brevo" },
+        { id: "cap_email",    title: "✉️ Email",           description: "Send, track & retrieve emails via Mailgun" },
         { id: "cap_crm",      title: "🗃️ CRM",             description: "Manage leads & contacts" },
         { id: "cap_calendar", title: "📅 Calendar",       description: "Create & manage events" },
     ];

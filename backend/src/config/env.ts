@@ -41,11 +41,9 @@ export const env = {
     openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1",
     geminiTranscriptionModel: process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
 
-    // ── SMTP ────────────────────────────────────────────────────────────────
-    smtpHost: process.env.SMTP_HOST,
-    smtpPort: Number(process.env.SMTP_PORT),
-    smtpSecure: process.env.SMTP_SECURE === "true",
-    smtpUser: process.env.SMTP_USER,
-    smtpPass: process.env.SMTP_PASS,
-    emailFrom: process.env.EMAIL_FROM,
+    // ── Mailgun Engine ──────────────────────────────────────────────────────
+    mailgunApiKey: process.env.MAILGUN_API_KEY,
+    mailgunDomain: process.env.MAILGUN_DOMAIN,
+    mailgunBaseUrl: process.env.MAILGUN_BASE_URL ?? "https://api.mailgun.net",
+    mailgunSenderEmail: process.env.MAILGUN_SENDER_EMAIL ?? "eywhatsappbot43@gmail.com",
 };

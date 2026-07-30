@@ -285,7 +285,7 @@ function App() {
               <FeatureCard 
                 icon={<Zap size={28} className="text-teal-400" />}
                 title="LangGraph Router & Action Tools"
-                description="Dynamically decides whether to execute real-time action tools (Tavily, Brevo Email, CRM) or route to Knowledge Base bots."
+                description="Dynamically decides whether to execute real-time action tools (Tavily, Mailgun Email, CRM) or route to Knowledge Base bots."
               />
               <FeatureCard 
                 icon={<MessageSquare size={28} className="text-cyan-400" />}
@@ -326,7 +326,7 @@ function App() {
                   </div>
                   <div className="bg-emerald-950 border border-emerald-800/50 p-2.5 rounded-lg text-emerald-200 mr-4">
                     🤖 <strong>Capabilities Overview:</strong><br />
-                    • ⚡ <strong>Action Tools</strong>: Web Search, Weather, Brevo Email, CRM, Calendar.<br />
+                    • ⚡ <strong>Action Tools</strong>: Web Search, Weather, Mailgun Email, CRM, Calendar.<br />
                     • 📚 <strong>Knowledge Bases</strong>: ToolTap Support, Custom Bots.
                   </div>
                   <div className="bg-slate-800 p-2.5 rounded-lg text-slate-200 ml-6">
