@@ -257,21 +257,21 @@ async function fetchMetaMediaUrl(mediaId: string): Promise<string | null> {
 }
 
 /**
- * Downloads audio from Meta CDN and transcribes it using Gemini multimodal.
- * Supports audio/ogg (WhatsApp voice notes), audio/mpeg, audio/mp4.
+ * Downloads audio from Meta CDN and transcribes it using the configured transcription provider.
+ *
+ * TRANSCRIPTION_PROVIDER controls which backend is used:
+ *   - "gemini"  → Gemini multimodal REST API (sends base64 inline audio)
+ *   - "openai"  → OpenAI Whisper API (sends audio as form-data)
+ *   - "github"  → GitHub Models Whisper (same as OpenAI path, uses GITHUB_TOKEN + baseURL)
+ *
+ * Supports audio/ogg, audio/mpeg, audio/mp4 (WhatsApp voice note formats).
  */
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
-    const googleKey = process.env.GOOGLE_API_KEY || "";
     const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    // Use the same model that's configured in .env (e.g. gemini-2.0-flash or gemini-3.5-flash)
-    const transcriptionModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const transcriptionProvider = (process.env.TRANSCRIPTION_PROVIDER ?? "gemini").toLowerCase();
 
-    if (!googleKey) {
-        console.warn("[Transcription] GOOGLE_API_KEY not set — cannot transcribe voice.");
-        return null;
-    }
     try {
-        // Download audio bytes from Meta CDN (requires auth header)
+        // Download audio bytes from Meta CDN (requires WhatsApp auth header)
         const audioRes = await fetch(audioUrl, {
             headers: { Authorization: `Bearer ${apiToken}` },
         });
@@ -279,43 +279,100 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
             console.error(`[Transcription] Failed to download audio (${audioRes.status})`);
             return null;
         }
+
         const audioBuffer = await audioRes.arrayBuffer();
-        const audioBase64 = Buffer.from(audioBuffer).toString("base64");
-        // WhatsApp voice notes are always audio/ogg; use that as fallback
         const rawContentType = audioRes.headers.get("content-type") || "audio/ogg";
         const mimeType = rawContentType.split(";")[0].trim();
 
-        // Transcribe using Gemini multimodal via REST (avoids SDK version issues)
-        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${transcriptionModel}:generateContent?key=${googleKey}`;
-        const body = {
-            contents: [{
-                parts: [
-                    { inlineData: { mimeType, data: audioBase64 } },
-                    { text: "Transcribe the audio message exactly as spoken. Return only the transcribed text, nothing else." },
-                ],
-            }],
-        };
-
-        const geminiRes = await fetch(apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-        });
-
-        if (!geminiRes.ok) {
-            const errText = await geminiRes.text();
-            console.error(`[Transcription] Gemini API error (${geminiRes.status}): ${errText}`);
-            return null;
+        // ── Gemini multimodal transcription ──────────────────────────────────
+        if (transcriptionProvider === "gemini") {
+            const googleKey = process.env.GOOGLE_API_KEY || "";
+            if (!googleKey) {
+                console.warn("[Transcription] GOOGLE_API_KEY not set — cannot use Gemini transcription.");
+                return null;
+            }
+            const model = process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+            const audioBase64 = Buffer.from(audioBuffer).toString("base64");
+            const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${googleKey}`;
+            const body = {
+                contents: [{
+                    parts: [
+                        { inlineData: { mimeType, data: audioBase64 } },
+                        { text: "Transcribe the audio message exactly as spoken. Return only the transcribed text, nothing else." },
+                    ],
+                }],
+            };
+            const res = await fetch(apiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                const errText = await res.text();
+                console.error(`[Transcription] Gemini API error (${res.status}): ${errText}`);
+                return null;
+            }
+            const data = await res.json() as any;
+            return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
         }
 
-        const geminiData = await geminiRes.json() as any;
-        const transcript = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        return transcript || null;
+        // ── OpenAI Whisper transcription (also used for GitHub Models) ────────
+        if (transcriptionProvider === "openai" || transcriptionProvider === "github") {
+            let apiKey: string;
+            let baseURL: string;
+            let whisperModel: string;
+
+            if (transcriptionProvider === "github") {
+                apiKey = process.env.GITHUB_TOKEN || "";
+                baseURL = process.env.GITHUB_BASE_URL ?? "https://models.github.ai/inference";
+                whisperModel = "openai/whisper-large";
+                if (!apiKey) {
+                    console.warn("[Transcription] GITHUB_TOKEN not set — cannot use GitHub transcription.");
+                    return null;
+                }
+            } else {
+                apiKey = process.env.OPENAI_API_KEY || "";
+                baseURL = "https://api.openai.com/v1";
+                whisperModel = process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1";
+                if (!apiKey) {
+                    console.warn("[Transcription] OPENAI_API_KEY not set — cannot use OpenAI transcription.");
+                    return null;
+                }
+            }
+
+            // Determine file extension from MIME type
+            const ext = mimeType === "audio/ogg" ? "ogg"
+                : mimeType === "audio/mpeg" ? "mp3"
+                : mimeType === "audio/mp4" ? "mp4"
+                : "ogg";
+
+            const formData = new FormData();
+            formData.append("file", new Blob([audioBuffer], { type: mimeType }), `audio.${ext}`);
+            formData.append("model", whisperModel);
+            formData.append("response_format", "text");
+
+            const res = await fetch(`${baseURL}/audio/transcriptions`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${apiKey}` },
+                body: formData,
+            });
+            if (!res.ok) {
+                const errText = await res.text();
+                console.error(`[Transcription] ${transcriptionProvider} Whisper error (${res.status}): ${errText}`);
+                return null;
+            }
+            const transcript = await res.text();
+            return transcript.trim() || null;
+        }
+
+        console.warn(`[Transcription] Unknown TRANSCRIPTION_PROVIDER: "${transcriptionProvider}". Supported: gemini, openai, github`);
+        return null;
     } catch (e) {
         console.error("[Transcription] Audio transcription failed:", e);
         return null;
     }
 }
+
 
 export function startServer() {
     const server = app.listen(port, () => {

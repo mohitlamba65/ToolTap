@@ -142,12 +142,31 @@ function buildTextPayload(intent: ResponseIntent, to: string): WhatsAppTextPaylo
     };
 }
 
+/**
+ * Smart word-boundary truncation.
+ * Unlike .slice(0, N), this breaks at the last complete word before the limit
+ * so labels read naturally rather than mid-word (e.g. "SLA Govern" not "SLA Governanc").
+ * Appends "…" only when actual truncation occurs and there's room.
+ */
+function smartTrunc(text: string, maxLen: number): string {
+    if (text.length <= maxLen) return text;
+    // Try to break at last space before maxLen
+    const lastSpace = text.lastIndexOf(" ", maxLen - 1);
+    if (lastSpace > maxLen / 2) {
+        // Good break point found — trim trailing punctuation and add ellipsis if room
+        const cut = text.slice(0, lastSpace).replace(/[,;:]+$/, "");
+        return cut.length <= maxLen - 1 ? cut + "…" : cut.slice(0, maxLen);
+    }
+    // No good word break — hard truncate with ellipsis if room
+    return text.slice(0, maxLen - 1) + "…";
+}
+
 function buildButtonsPayload(intent: ResponseIntent, to: string): WhatsAppButtonsPayload {
     const buttons = (intent.buttons || []).slice(0, 3).map((btn) => ({
         type: "reply" as const,
         reply: {
             id: btn.id.slice(0, 256),
-            title: btn.title.slice(0, 20),
+            title: smartTrunc(btn.title, 20),
         },
     }));
 
@@ -168,10 +187,10 @@ function buildButtonsPayload(intent: ResponseIntent, to: string): WhatsAppButton
 
 function buildListPayload(intent: ResponseIntent, to: string): WhatsAppListPayload {
     const sections = (intent.listSections || []).map((section) => ({
-        title: section.title.slice(0, 24),
+        title: smartTrunc(section.title, 24),
         rows: section.rows.map((row) => ({
             id: row.id.slice(0, 200),
-            title: row.title.slice(0, 24),
+            title: smartTrunc(row.title, 24),
             ...(row.description ? { description: row.description.slice(0, 72) } : {}),
         })),
     }));

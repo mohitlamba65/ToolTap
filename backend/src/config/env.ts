@@ -9,37 +9,43 @@ if (fs.existsSync(backendEnvPath)) {
 }
 
 export const env = {
+    // ── LLM Inference Provider ──────────────────────────────────────────────
+    // Supported: "gemini" | "openai" | "github" | "ollama"
     provider: process.env.MODEL_PROVIDER ?? "gemini",
 
     openaiKey: process.env.OPENAI_API_KEY,
-
     googleKey: process.env.GOOGLE_API_KEY,
 
-    ollamaBaseUrl:
-        process.env.OLLAMA_BASE_URL ??
-        "http://localhost:11434",
+    // GitHub Models — uses OpenAI SDK with custom baseURL
+    githubToken: process.env.GITHUB_TOKEN,
+    githubBaseUrl: process.env.GITHUB_BASE_URL ?? "https://models.github.ai/inference",
+    githubModel: process.env.GITHUB_MODEL ?? "openai/gpt-4.1",
 
-    openaiModel:
-        process.env.OPENAI_MODEL ??
-        "gpt-5.5",
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
 
-    geminiModel:
-        process.env.GEMINI_MODEL ??
-        "gemini-3.5-flash",
+    openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+    geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+    ollamaModel: process.env.OLLAMA_MODEL ?? "qwen3:4b",
 
-    ollamaModel:
-        process.env.OLLAMA_MODEL ??
-        "gpt-oss:20b",
+    // ── Embedding Provider ───────────────────────────────────────────────────
+    // Supported: "gemini" | "openai" | "github"
+    // Defaults to using the same provider as the LLM provider.
+    embeddingProvider: process.env.EMBEDDING_PROVIDER ?? process.env.MODEL_PROVIDER ?? "gemini",
+    openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
+    geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
 
+    // ── Voice Transcription Provider ─────────────────────────────────────────
+    // Supported: "gemini" | "openai" | "github"
+    // GitHub uses Whisper via OpenAI-compatible API.
+    transcriptionProvider: process.env.TRANSCRIPTION_PROVIDER ?? "gemini",
+    openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1",
+    geminiTranscriptionModel: process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+
+    // ── SMTP ────────────────────────────────────────────────────────────────
     smtpHost: process.env.SMTP_HOST,
-
     smtpPort: Number(process.env.SMTP_PORT),
-
     smtpSecure: process.env.SMTP_SECURE === "true",
-
     smtpUser: process.env.SMTP_USER,
-
     smtpPass: process.env.SMTP_PASS,
-
     emailFrom: process.env.EMAIL_FROM,
 };

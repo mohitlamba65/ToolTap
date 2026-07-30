@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CustomChatbot, RAGResult } from "../rag/types.js";
-import { StructureAwareChunker } from "../rag/chunker.ts";
+import { StructureAwareChunker } from "../rag/chunker.js";
 import { globalQdrantManager } from "../rag/qdrant.js";
 import { SemanticRAGPipeline } from "../rag/pipeline.js";
 import { RAG_PROMPT } from "../agent/prompts/rag.prompt.js";
@@ -97,54 +97,7 @@ export class KnowledgeBaseStore {
     }
 
     private async initStore() {
-        // 1. Seed default support bot ONLY if no chatbots exist at all
-        if (this.chatbots.size === 0) {
-            const defaultBot: CustomChatbot = {
-                id: "cb_default_support",
-                name: "ToolTap Enterprise Guide & Support Bot",
-                description: "Handles questions regarding ToolTap architecture, CRM setup, Brevo email setup, and system commands.",
-                systemPrompt: "You are the ToolTap Product Specialist. Answer questions accurately based on official product docs.",
-                triggerKeywords: ["support", "help", "guide", "pricing", "setup", "docs", "how to"],
-                kbCollectionName: "kb_tooltap_support",
-                enabled: true,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-            };
-
-            this.chatbots.set(defaultBot.id, defaultBot);
-            this.saveChatbots();
-
-            const defaultDocContent = `# ToolTap Enterprise AI Platform Guide
-
-## Overview
-ToolTap is an enterprise WhatsApp AI orchestration engine designed for high-scalability workflows.
-
-## Key Features
-- **Multi-Provider Engine**: Switch seamlessly between Meta Cloud API and Twilio without server restart.
-- **Rich WhatsApp Formatting**: LLM dynamically outputs Quick Reply Buttons (<=3 choices), Scrollable Lists (>3 choices), or Media payloads.
-- **Action Tools**: Real-time web search (Tavily), Weather forecast, Brevo email dispatcher, and Dual-backend CRM (HubSpot & Postgres).
-- **Semantic RAG**: Qdrant-backed structure-aware retrieval with multi-factor reranking.
-
-## CRM Configuration
-Users can choose between two backends:
-1. **HubSpot**: Requires user-supplied HubSpot API Key.
-2. **Direct Postgres**: Requires Postgres connection string and target table name.
-
-## Email Operations
-Powered by Brevo REST API. Supports sending transactional HTML emails and tracking delivery history.
-`;
-
-            await this.ingestDocument(
-                defaultBot.kbCollectionName,
-                defaultDocContent,
-                "tooltap_guide.md",
-                "ToolTap Product Documentation",
-                "platform_guides",
-                ["architecture", "support", "setup"]
-            );
-        }
-
-        // 2. Re-hydrate stored documents into Qdrant vector memory on startup
+        // Re-hydrate stored documents into Qdrant vector memory on startup
         let totalChunks = 0;
         for (const doc of this.documents.values()) {
             const chunks = this.chunker.chunkDocument(doc.content, doc.source, doc.title, doc.category, doc.tags);
@@ -182,7 +135,7 @@ Powered by Brevo REST API. Supports sending transactional HTML emails and tracki
             name: botData.name,
             description: botData.description,
             systemPrompt: botData.systemPrompt,
-            userPromptTemplate: botData.userPromptTemplate,
+            ...(botData.userPromptTemplate ? { userPromptTemplate: botData.userPromptTemplate } : {}),
             triggerKeywords: botData.triggerKeywords || [],
             kbCollectionName: botData.kbCollectionName || `kb_${id}`,
             enabled: botData.enabled ?? true,

@@ -8,31 +8,59 @@ export interface EmbeddingsInterface {
 }
 
 /**
- * Robust Embeddings Factory for Semantic RAG
- * 
- * Tries GoogleGenerativeAIEmbeddings (text-embedding-004) primary.
- * Auto-falls back to OpenAI / pseudo-vector if model name is invalid or API fails.
+ * Provider-aware Embeddings Factory for Semantic RAG.
+ *
+ * Respects EMBEDDING_PROVIDER env flag (defaults to MODEL_PROVIDER value).
+ * Supported: "gemini" | "openai" | "github"
+ *
+ * GitHub Models does not currently support embeddings via its inference gateway,
+ * so "github" embedding provider falls back to OpenAI text-embedding-3-small
+ * using the same GitHub token — or Gemini if GOOGLE_API_KEY is set.
+ *
+ * Priority: EMBEDDING_PROVIDER → fallback (same provider as LLM) → pseudo-vector.
  */
 export function createEmbeddings(): EmbeddingsInterface {
+    const provider = env.embeddingProvider.toLowerCase();
     let primary: EmbeddingsInterface | null = null;
     let secondary: EmbeddingsInterface | null = null;
 
-    if (env.googleKey) {
+    // Select primary embedding model based on EMBEDDING_PROVIDER
+    if (provider === "gemini" && env.googleKey) {
         primary = new GoogleGenerativeAIEmbeddings({
             apiKey: env.googleKey,
-            model: "gemini-embedding-001",
+            model: env.geminiEmbeddingModel,
+        }) as any;
+    } else if ((provider === "openai") && env.openaiKey) {
+        primary = new OpenAIEmbeddings({
+            apiKey: env.openaiKey,
+            modelName: env.openaiEmbeddingModel,
+        }) as any;
+    } else if (provider === "github" && env.githubToken) {
+        // GitHub Models uses OpenAI-compatible API — embeddings endpoint is available
+        primary = new OpenAIEmbeddings({
+            apiKey: env.githubToken,
+            modelName: "text-embedding-3-small",
+            configuration: { baseURL: env.githubBaseUrl },
         }) as any;
     }
 
-    if (env.openaiKey) {
+    // Set up secondary fallback (different from primary)
+    if (provider !== "gemini" && env.googleKey) {
+        secondary = new GoogleGenerativeAIEmbeddings({
+            apiKey: env.googleKey,
+            model: env.geminiEmbeddingModel,
+        }) as any;
+    } else if (provider !== "openai" && provider !== "github" && env.openaiKey) {
         secondary = new OpenAIEmbeddings({
             apiKey: env.openaiKey,
-            modelName: "text-embedding-3-small",
+            modelName: env.openaiEmbeddingModel,
         }) as any;
     }
 
-    const fallback: EmbeddingsInterface = {
+    // Pseudo-vector fallback — deterministic but not semantically meaningful
+    const pseudoFallback: EmbeddingsInterface = {
         async embedQuery(text: string): Promise<number[]> {
+            console.warn("[Embeddings] ⚠️ No embedding API key available — using pseudo-vector fallback. RAG quality will be degraded.");
             return generatePseudoVector(text, 768);
         },
         async embedDocuments(documents: string[]): Promise<number[][]> {
@@ -43,44 +71,31 @@ export function createEmbeddings(): EmbeddingsInterface {
     return {
         async embedQuery(text: string): Promise<number[]> {
             if (primary) {
-                try {
-                    return await primary.embedQuery(text);
-                } catch (e: any) {
-                    console.warn("[Embeddings] Primary Google embedding failed, switching to fallback:", e?.message || e);
-                }
+                try { return await primary.embedQuery(text); }
+                catch (e: any) { console.warn(`[Embeddings] Primary (${provider}) failed, trying secondary:`, e?.message || e); }
             }
             if (secondary) {
-                try {
-                    return await secondary.embedQuery(text);
-                } catch (e: any) {
-                    console.warn("[Embeddings] Secondary OpenAI embedding failed:", e?.message || e);
-                }
+                try { return await secondary.embedQuery(text); }
+                catch (e: any) { console.warn("[Embeddings] Secondary failed:", e?.message || e); }
             }
-            return fallback.embedQuery(text);
+            return pseudoFallback.embedQuery(text);
         },
-
         async embedDocuments(documents: string[]): Promise<number[][]> {
             if (primary) {
-                try {
-                    return await primary.embedDocuments(documents);
-                } catch (e: any) {
-                    console.warn("[Embeddings] Primary Google embedDocuments failed, switching to fallback:", e?.message || e);
-                }
+                try { return await primary.embedDocuments(documents); }
+                catch (e: any) { console.warn(`[Embeddings] Primary (${provider}) failed, trying secondary:`, e?.message || e); }
             }
             if (secondary) {
-                try {
-                    return await secondary.embedDocuments(documents);
-                } catch (e: any) {
-                    console.warn("[Embeddings] Secondary OpenAI embedDocuments failed:", e?.message || e);
-                }
+                try { return await secondary.embedDocuments(documents); }
+                catch (e: any) { console.warn("[Embeddings] Secondary failed:", e?.message || e); }
             }
-            return fallback.embedDocuments(documents);
+            return pseudoFallback.embedDocuments(documents);
         },
     };
 }
 
 /**
- * Pseudo-vector generator for local fallback mode when no embedding API key is present
+ * Pseudo-vector: deterministic hash-based vector when no API is available.
  */
 function generatePseudoVector(text: string, dimensions = 768): number[] {
     const vector: number[] = new Array(dimensions).fill(0);
@@ -89,7 +104,6 @@ function generatePseudoVector(text: string, dimensions = 768): number[] {
         hash = (hash << 5) - hash + text.charCodeAt(i);
         hash |= 0;
     }
-
     for (let i = 0; i < dimensions; i++) {
         const seed = Math.sin(hash + i) * 10000;
         vector[i] = seed - Math.floor(seed);

@@ -4,11 +4,11 @@ import { AIMessage } from "@langchain/core/messages";
 
 /**
  * Capability-Aware Router Node
- * 
+ *
  * Inspects incoming message to decide:
- * 1. Is user asking "What can you do?" -> List ALL Action Tools + Custom Chatbots!
- * 2. Matches a Custom Chatbot trigger keyword -> Execute Semantic RAG for that chatbot.
- * 3. Requires Action Tool -> Pass control to agent reasoning node.
+ * 1. Is user asking "What can you do?" → List ALL Action Tools + Custom Chatbots!
+ * 2. Matches a Custom Chatbot trigger keyword → Execute Semantic RAG for that chatbot.
+ * 3. Requires Action Tool → Pass control to agent reasoning node.
  */
 export async function routerNode(state: AgentState): Promise<Partial<AgentState>> {
     const lastMessage = state.messages[state.messages.length - 1];
@@ -34,24 +34,45 @@ export async function routerNode(state: AgentState): Promise<Partial<AgentState>
 
     // 2. Check for Custom Chatbot Keyword Matches
     const activeChatbots = kbStore.getChatbots().filter((b) => b.enabled);
-    for (const bot of activeChatbots) {
-        const matched = bot.triggerKeywords.some((kw) => queryLower.includes(kw.toLowerCase()));
-        if (matched) {
+
+    // Collect ALL bots that match the query keywords
+    const matchedBots = activeChatbots.filter((bot) =>
+        bot.triggerKeywords.some((kw) => queryLower.includes(kw.toLowerCase()))
+    );
+
+    if (matchedBots.length > 0) {
+        // Build conversation context once (shared across all parallel queries)
+        const conversationContext = state.messages
+            .slice(-6) // Last 3 human+ai pairs for context window efficiency
+            .map((m) => `${m._getType() === "human" ? "User" : "Assistant"}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+            .join("\n");
+
+        if (matchedBots.length === 1) {
+            // Single match — invoke directly, no Promise overhead
+            const bot = matchedBots[0];
             console.log(`🔀 [Router] Query matched chatbot '${bot.name}' (id: ${bot.id})`);
             try {
-                // Build conversation context so the RAG model has memory of prior turns
-                const conversationContext = state.messages
-                    .slice(-6) // Last 3 human+ai pairs for context window efficiency
-                    .map((m) => `${m._getType() === "human" ? "User" : "Assistant"}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
-                    .join("\n");
-
                 const ragResult = await kbStore.queryChatbot(bot.id, query, conversationContext);
-
-                return {
-                    messages: [new AIMessage(ragResult.answer)],
-                };
+                return { messages: [new AIMessage(ragResult.answer)] };
             } catch (e) {
                 console.error(`[Router] RAG query failed for chatbot '${bot.id}':`, e);
+            }
+        } else {
+            // Multiple matches — run ALL in parallel, use the first successful response.
+            // This avoids sequential wait (bot1 → bot2 → bot3) when multiple KBs activate.
+            console.log(`🔀 [Router] ${matchedBots.length} bots matched — running parallel RAG race: [${matchedBots.map(b => b.name).join(", ")}]`);
+            try {
+                const ragResult = await Promise.race(
+                    matchedBots.map(async (bot) => {
+                        const result = await kbStore.queryChatbot(bot.id, query, conversationContext);
+                        if (result.abstained) throw new Error(`Bot '${bot.id}' abstained`);
+                        console.log(`🏁 [Router] RAG race won by '${bot.name}'`);
+                        return result;
+                    })
+                );
+                return { messages: [new AIMessage(ragResult.answer)] };
+            } catch (e) {
+                console.error(`[Router] All parallel RAG queries failed or abstained:`, e);
             }
         }
     }

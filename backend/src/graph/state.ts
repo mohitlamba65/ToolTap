@@ -3,53 +3,76 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { ResponseIntent, WhatsAppPayload } from "./types.js";
 
 /**
- * ToolTap Agent Graph State
- * 
- * Inspired by the copywriting agent's state pattern, this defines
- * the complete state that flows through the LangGraph workflow.
- * 
- * Key design decisions:
- * - `messages` uses LangGraph's built-in message reducer for proper
- *   accumulation across turns (human-in-the-loop support)
- * - `responseIntent` holds the LLM's structured format decision
- * - `whatsappPayload` is the final API-ready payload
- * - `recipientPhone` is set on entry and carried through all nodes
+ * Trim message history to last N messages to avoid unbounded token growth.
+ * MemorySaver accumulates forever; this reducer caps it at the graph level.
+ */
+const MAX_HISTORY_MESSAGES = 10; // 5 user+assistant turns
+
+function trimmedMessageReducer(existing: BaseMessage[], incoming: BaseMessage[]): BaseMessage[] {
+    const full = messagesStateReducer(existing, incoming);
+    if (full.length > MAX_HISTORY_MESSAGES) {
+        return full.slice(-MAX_HISTORY_MESSAGES);
+    }
+    return full;
+}
+
+/**
+ * ToolTap Unified Agent Graph State
+ *
+ * Single state object that flows through the entire graph.
+ * All nodes read from and write to this state.
  */
 export const AgentGraphState = Annotation.Root({
-    // Core LangGraph message history — accumulated across turns
+    // ── Core conversation history (auto-trimmed to last 10) ─────────────────
     messages: Annotation<BaseMessage[]>({
-        reducer: messagesStateReducer,
+        reducer: trimmedMessageReducer,
         default: () => [],
     }),
 
-    // Who we're talking to
+    // ── Recipient info ───────────────────────────────────────────────────────
     recipientPhone: Annotation<string>({
         reducer: (x, y) => y ?? x,
         default: () => "",
     }),
-
-    // The user's profile name from WhatsApp
     profileName: Annotation<string>({
         reducer: (x, y) => y ?? x,
         default: () => "",
     }),
 
-    // The LLM's decision about which message format to use
+    // ── Orchestrator decision ────────────────────────────────────────────────
+    // Set by orchestratorNode; drives conditional routing to the correct execution node.
+    intent: Annotation<"tool" | "rag" | "capability" | null>({
+        reducer: (x, y) => y ?? x,
+        default: () => null,
+    }),
+    // Which RAG bot the orchestrator decided to query (if intent === "rag")
+    ragBotId: Annotation<string | null>({
+        reducer: (x, y) => y ?? x,
+        default: () => null,
+    }),
+    // Persists the last successfully used RAG bot ID across turns.
+    // Used by the orchestrator as a strong hint when it receives ambiguous short replies
+    // like button/list selections that are continuations of a RAG conversation.
+    lastRagBotId: Annotation<string | null>({
+        reducer: (x, y) => y ?? x,
+        default: () => null,
+    }),
+    // Set by ragNode if the RAG answer was insufficient — triggers escalation to agent
+    ragEscalated: Annotation<boolean>({
+        reducer: (x, y) => y ?? x,
+        default: () => false,
+    }),
+
+    // ── Formatter output ─────────────────────────────────────────────────────
     responseIntent: Annotation<ResponseIntent | null>({
         reducer: (x, y) => y ?? x,
         default: () => null,
     }),
 
-    // The final WhatsApp API payload ready for delivery
+    // ── WhatsApp delivery ────────────────────────────────────────────────────
     whatsappPayload: Annotation<WhatsAppPayload | null>({
         reducer: (x, y) => y ?? x,
         default: () => null,
-    }),
-
-    // Whether the agent is waiting for user input
-    awaitingInput: Annotation<boolean>({
-        reducer: (x, y) => y ?? x,
-        default: () => false,
     }),
 });
 
