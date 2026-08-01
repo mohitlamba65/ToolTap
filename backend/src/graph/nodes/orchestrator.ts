@@ -1,4 +1,4 @@
-import { createModel } from "../../llm/provider.js";
+import { createModel, createStructuredModel } from "../../llm/provider.js";
 import { kbStore } from "../../kb/kb-store.js";
 import type { AgentState } from "../state.js";
 import { z } from "zod";
@@ -60,12 +60,26 @@ export async function orchestratorNode(state: AgentState): Promise<Partial<Agent
         }
     }
 
-    // Build conversation history string (last 4 messages = ~2 turns of context)
-    const recentHistory = messages.slice(-5, -1); // exclude last (current) message
+    // --- Fast-path: Greetings, Hi, Hello, Help, Capabilities → capabilityNode (0ms)
+    // Sends the full interactive WhatsApp List Menu featuring ALL 5 action tools + ALL RAG chatbots.
+    const cleanLower = currentQuery.trim().toLowerCase().replace(/[^a-z0-9\s]/g, "");
+    const isGreetingOrHelp =
+        ["hello", "hi", "hey", "start", "help", "menu", "what can you do", "capabilities", "features"].includes(cleanLower) ||
+        cleanLower === "hello" || cleanLower === "hi" || cleanLower === "hey" ||
+        cleanLower.includes("what can you do") || cleanLower.includes("list tools") || cleanLower.includes("show capabilities");
+
+    if (isGreetingOrHelp && !lastRagBotId && messages.length <= 3) {
+        console.log(`🧭 [Orchestrator] Fast-path: Greeting/Help query '${currentQuery}' → capabilityNode (List Menu)`);
+        return { intent: "capability", ragBotId: null };
+    }
+
+    // Build conversation history string (last 2 messages = ~1 turn of context — enough for routing)
+    const recentHistory = messages.slice(-3, -1); // exclude last (current) message
     const historyBlock = recentHistory.length > 0
         ? `\n\nCONVERSATION HISTORY (most recent first):\n${recentHistory
             .slice()
             .reverse()
+            .slice(0, 2)   // cap at 2 messages
             .map((m) => {
                 const role = m._getType() === "human" ? "User" : "Assistant";
                 const content = typeof m.content === "string"
@@ -73,22 +87,22 @@ export async function orchestratorNode(state: AgentState): Promise<Partial<Agent
                     : Array.isArray(m.content)
                         ? m.content.map((c: any) => typeof c === "string" ? c : c.text || "").join(" ")
                         : JSON.stringify(m.content);
-                return `[${role}]: ${content.slice(0, 300)}`;
+                return `[${role}]: ${content.slice(0, 150)}`; // 150 chars max per message
             })
             .join("\n")}`
         : "";
 
-    // Build active bots context
+    // Build active bots context — id, name, and keywords only (no description, saves tokens)
     const activeBots = kbStore.getChatbots().filter((b) => b.enabled);
     const botsContext = activeBots.length > 0
         ? `\n\nAVAILABLE KNOWLEDGE BASE CHATBOTS:\n${activeBots.map((b) =>
-            `- ID: "${b.id}" | Name: "${b.name}" | Topics: ${b.triggerKeywords.join(", ")} | Description: ${b.description}`
+            `- ID:"${b.id}" Name:"${b.name}" Keywords:${b.triggerKeywords.slice(0, 6).join(",")}`
         ).join("\n")}`
         : "\n\nNo knowledge base chatbots are currently active.";
 
     // Include last known RAG bot as a continuity hint
     const continuityHint = lastRagBotId
-        ? `\n\nCONTINUITY HINT: The previous response was from knowledge base bot ID "${lastRagBotId}". If the current message is a follow-up, continuation, or short acknowledgement, strongly prefer routing to the same bot.`
+        ? `\n\nCONTINUITY HINT: Last response was from bot ID "${lastRagBotId}". Short follow-ups/button replies should continue to that bot.`
         : "";
 
     const systemPrompt = `You are an intelligent routing orchestrator for a WhatsApp AI assistant.
@@ -105,18 +119,18 @@ ACTION TOOLS (use intent="tool"):
 ${botsContext}${continuityHint}${historyBlock}
 
 ROUTING RULES:
-1. Use intent="capability" ONLY when the user EXPLICITLY asks what the bot can do, asks for a feature list, or asks for "help". DO NOT use this for short acknowledgement messages like "yes", "tell me more", "go on", "ok", etc.
+1. Use intent="capability" when the user sends greetings ("hello", "hi", "hey", "start"), asks what the bot can do, asks for a feature list, or asks for "help" or "menu".
 2. Use intent="rag" when:
    - The query matches a knowledge base chatbot's topics/description.
    - The current message is a button reply, list reply, or short follow-up AFTER a knowledge base response (check conversation history and continuity hint).
    - The user says "yes", "tell me more", "continue", "ok" after the assistant gave a knowledge base answer.
-3. Use intent="tool" for all other requests (actions, real-time data, external system operations, general Q&A not matching a chatbot).
-4. Default to intent="tool" if truly unsure.
+3. Use intent="tool" for specific action execution requests (e.g. "search web for X", "check weather in Y", "send email to Z", "add CRM lead").
+4. Default to intent="capability" for general greetings or broad inquiries.
 
 CRITICAL RULE: Button replies (e.g., "Yes, tell me more", "Learn more") and list replies are NEVER capability requests. They are ALWAYS continuations of the previous conversation — check history to determine the correct bot.`;
 
     try {
-        const structuredModel = model.withStructuredOutput(OrchestratorDecision, { name: "routing_decision" });
+        const structuredModel = createStructuredModel(OrchestratorDecision, "routing_decision");
         const decision = await structuredModel.invoke([
             { role: "system", content: systemPrompt },
             { role: "user", content: currentQuery },

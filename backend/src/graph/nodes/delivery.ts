@@ -14,6 +14,8 @@ import type {
     WhatsAppReactionPayload,
 } from "../types.js";
 
+import { generateSpeechAudio, uploadAudioToMeta } from "../../utils/tts.js";
+
 /**
  * Ensures standard Markdown (e.g. **bold**, ### Header) is converted to WhatsApp syntax.
  * WhatsApp uses *bold* (single asterisk), _italic_ (single underscore).
@@ -60,6 +62,20 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
                 if (r.description) r.description = sanitizeWhatsAppMarkdown(r.description);
             });
         });
+    }
+
+    // ── Text-To-Speech (TTS) Voice Generation ─────────────────────────────────
+    // If messageType is audio and no media URL/ID was provided, synthesize speech via OpenAI TTS
+    if (responseIntent.messageType === "audio" && !responseIntent.mediaId && !responseIntent.mediaUrl) {
+        console.log(`🎙️ [DeliveryNode] Generating Text-To-Speech audio output for response...`);
+        const audioBuffer = await generateSpeechAudio(responseIntent.text);
+        if (audioBuffer) {
+            const mediaId = await uploadAudioToMeta(audioBuffer, "audio/mpeg");
+            if (mediaId) {
+                responseIntent.mediaId = mediaId;
+                console.log(`✅ [DeliveryNode] Voice audio uploaded to Meta with Media ID: ${mediaId}`);
+            }
+        }
     }
 
     const provider = (process.env.WHATSAPP_PROVIDER || "meta").toLowerCase();
@@ -254,7 +270,7 @@ function buildImagePayload(intent: ResponseIntent, to: string): WhatsAppImagePay
         to,
         type: "image",
         image: {
-            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl || "" }),
             ...(intent.caption ? { caption: intent.caption.slice(0, 1024) } : {}),
         },
     };
@@ -267,7 +283,7 @@ function buildDocumentPayload(intent: ResponseIntent, to: string): WhatsAppDocum
         to,
         type: "document",
         document: {
-            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl || "" }),
             ...(intent.caption ? { caption: intent.caption.slice(0, 1024) } : {}),
             ...(intent.filename ? { filename: intent.filename } : {}),
         },
@@ -281,7 +297,7 @@ function buildVideoPayload(intent: ResponseIntent, to: string): WhatsAppVideoPay
         to,
         type: "video",
         video: {
-            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl || "" }),
             ...(intent.caption ? { caption: intent.caption.slice(0, 1024) } : {}),
         },
     };
@@ -294,7 +310,7 @@ function buildAudioPayload(intent: ResponseIntent, to: string): WhatsAppAudioPay
         to,
         type: "audio",
         audio: {
-            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl || "" }),
         },
     };
 }
@@ -306,7 +322,7 @@ function buildStickerPayload(intent: ResponseIntent, to: string): WhatsAppSticke
         to,
         type: "sticker",
         sticker: {
-            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl }),
+            ...(intent.mediaId ? { id: intent.mediaId } : { link: intent.mediaUrl || "" }),
         },
     };
 }

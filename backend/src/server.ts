@@ -8,6 +8,35 @@ import { parseIncomingWebhook } from "./whatsapp/webhook-parser.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { KnowledgeBaseStore, kbStore } from "./kb/kb-store.js";
 
+// ── Idempotency ────────────────────────────────────────────────────
+// Tracks WhatsApp message IDs to prevent duplicate pipeline executions.
+// WhatsApp frequently re-delivers webhooks on poor connections.
+const processedMessageIds = new Set<string>();
+const MESSAGE_ID_TTL_MS = 5 * 60 * 1000; // 5 min window
+const processedMessageTimestamps = new Map<string, number>();
+
+function isAlreadyProcessed(messageId: string): boolean {
+    if (!messageId) return false;
+    return processedMessageIds.has(messageId);
+}
+
+function markProcessed(messageId: string): void {
+    if (!messageId) return;
+    processedMessageIds.add(messageId);
+    processedMessageTimestamps.set(messageId, Date.now());
+
+    // Periodic cleanup — remove entries older than TTL
+    if (processedMessageIds.size > 1000) {
+        const now = Date.now();
+        for (const [id, ts] of processedMessageTimestamps.entries()) {
+            if (now - ts > MESSAGE_ID_TTL_MS) {
+                processedMessageIds.delete(id);
+                processedMessageTimestamps.delete(id);
+            }
+        }
+    }
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -17,9 +46,14 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
 
-// Create the LangGraph agent
-const graph = createToolTapGraph();
-console.log("✅ ToolTap LangGraph agent initialized with Router & Semantic RAG");
+// Graph is created asynchronously (needs Postgres connection)
+let graph: Awaited<ReturnType<typeof createToolTapGraph>>["graph"] | null = null;
+
+async function initGraph() {
+    const result = await createToolTapGraph();
+    graph = result.graph;
+    console.log("✅ ToolTap LangGraph agent initialized with Router & Semantic RAG");
+}
 
 // Active provider tracking (meta vs twilio)
 let currentProvider = process.env.WHATSAPP_PROVIDER || "meta";
@@ -68,8 +102,24 @@ app.post("/api/chatbots", (req: Request, res: Response) => {
 });
 
 app.delete("/api/chatbots/:id", (req: Request, res: Response) => {
-    const deleted = kbStore.deleteChatbot(req.params.id);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ error: "ID is required" });
+    const deleted = kbStore.deleteChatbot(id);
     res.json({ success: deleted });
+});
+
+app.delete("/api/kb/clear/:collectionName", async (req: Request, res: Response) => {
+    try {
+        const rawCollectionName = req.params.collectionName;
+        const collectionName = Array.isArray(rawCollectionName) ? rawCollectionName[0] : rawCollectionName;
+        if (!collectionName) {
+            return res.status(400).json({ error: "Collection name is required." });
+        }
+        await kbStore.clearCollection(collectionName);
+        res.json({ success: true, message: `Collection '${collectionName}' vectors and documents cleared.` });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Knowledge Base Ingestion API
@@ -145,10 +195,22 @@ async function handleWebhookPost(req: Request, res: Response) {
         }
 
         for (const message of messages) {
-            const { from, text, type, profileName } = message;
+            const { from, text, type, profileName, messageId } = message;
             console.log(`\n📩 [${type}] from ${from} (${profileName}): ${text}`);
 
             if (type === "reaction") continue;
+
+            // ── Idempotency check ─────────────────────────────────────────
+            if (messageId && isAlreadyProcessed(messageId)) {
+                console.log(`[Webhook] Duplicate messageId ${messageId} — skipped.`);
+                continue;
+            }
+            if (messageId) markProcessed(messageId);
+
+            if (!graph) {
+                console.warn("[Webhook] Graph not ready yet, skipping message.");
+                continue;
+            }
 
             const threadId = getThreadId(from);
 
@@ -177,7 +239,7 @@ async function handleWebhookPost(req: Request, res: Response) {
             }
 
             try {
-                await graph.invoke(
+                await graph!.invoke(
                     {
                         messages: [new HumanMessage(userContent)],
                         recipientPhone: from,
@@ -266,12 +328,100 @@ async function fetchMetaMediaUrl(mediaId: string): Promise<string | null> {
  *
  * Supports audio/ogg, audio/mpeg, audio/mp4 (WhatsApp voice note formats).
  */
+async function transcribeWithGemini(audioBuffer: ArrayBuffer, mimeType: string): Promise<string | null> {
+    const googleKey = process.env.GOOGLE_API_KEY || "";
+    if (!googleKey) return null;
+    try {
+        const model = process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+        const audioBase64 = Buffer.from(audioBuffer).toString("base64");
+        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${googleKey}`;
+        const body = {
+            contents: [{
+                parts: [
+                    { inlineData: { mimeType, data: audioBase64 } },
+                    { text: "Transcribe the audio message exactly as spoken. Return only the transcribed text, nothing else." },
+                ],
+            }],
+        };
+        const res = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) return null;
+        const data = (await res.json()) as any;
+        const textPart = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        return typeof textPart === "string" && textPart.trim().length > 0 ? textPart.trim() : null;
+    } catch (e) {
+        console.warn("[Transcription] Gemini attempt error:", e);
+        return null;
+    }
+}
+
+async function transcribeWithOpenAI(audioBuffer: ArrayBuffer, mimeType: string): Promise<string | null> {
+    const apiKey = process.env.OPENAI_API_KEY || "";
+    if (!apiKey) return null;
+    try {
+        const whisperModel = process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1";
+        const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp3") || mimeType.includes("mpeg") ? "mp3" : "wav";
+        const uint8 = new Uint8Array(audioBuffer);
+
+        const formData = new FormData();
+        formData.append("file", new Blob([uint8], { type: mimeType }), `audio.${ext}`);
+        formData.append("model", whisperModel);
+        formData.append("response_format", "text");
+
+        const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            body: formData,
+        });
+        if (!res.ok) return null;
+        const transcript = await res.text();
+        return transcript.trim() || null;
+    } catch (e) {
+        console.warn("[Transcription] OpenAI Whisper attempt error:", e);
+        return null;
+    }
+}
+
+async function transcribeWithGitHub(audioBuffer: ArrayBuffer, mimeType: string): Promise<string | null> {
+    const apiKey = process.env.GITHUB_TOKEN || "";
+    if (!apiKey) return null;
+    try {
+        const baseURL = process.env.GITHUB_BASE_URL ?? "https://models.github.ai/inference";
+        const uint8 = new Uint8Array(audioBuffer);
+        const ext = mimeType.includes("ogg") ? "ogg" : "mp3";
+
+        const formData = new FormData();
+        formData.append("file", new Blob([uint8], { type: mimeType }), `audio.${ext}`);
+        formData.append("model", "openai/whisper-large");
+        formData.append("response_format", "text");
+
+        const res = await fetch(`${baseURL}/audio/transcriptions`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            body: formData,
+        });
+        if (!res.ok) return null;
+        const transcript = await res.text();
+        return transcript.trim() || null;
+    } catch (e) {
+        console.warn("[Transcription] GitHub Whisper attempt error:", e);
+        return null;
+    }
+}
+
+/**
+ * Downloads audio from Meta CDN and transcribes it with automatic failover:
+ * Primary provider -> Secondary providers (OpenAI / Gemini / GitHub).
+ */
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
     const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    const transcriptionProvider = (process.env.TRANSCRIPTION_PROVIDER ?? "gemini").toLowerCase();
+    const primaryProvider = (process.env.TRANSCRIPTION_PROVIDER ?? "openai").toLowerCase();
 
     try {
-        // Download audio bytes from Meta CDN (requires WhatsApp auth header)
+        // Download audio bytes from Meta CDN
         const audioRes = await fetch(audioUrl, {
             headers: { Authorization: `Bearer ${apiToken}` },
         });
@@ -282,93 +432,28 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
 
         const audioBuffer = await audioRes.arrayBuffer();
         const rawContentType = audioRes.headers.get("content-type") || "audio/ogg";
-        const mimeType = rawContentType.split(";")[0].trim();
+        const mimeType = (rawContentType.split(";")[0] || "audio/ogg").trim();
 
-        // ── Gemini multimodal transcription ──────────────────────────────────
-        if (transcriptionProvider === "gemini") {
-            const googleKey = process.env.GOOGLE_API_KEY || "";
-            if (!googleKey) {
-                console.warn("[Transcription] GOOGLE_API_KEY not set — cannot use Gemini transcription.");
-                return null;
-            }
-            const model = process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
-            const audioBase64 = Buffer.from(audioBuffer).toString("base64");
-            const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${googleKey}`;
-            const body = {
-                contents: [{
-                    parts: [
-                        { inlineData: { mimeType, data: audioBase64 } },
-                        { text: "Transcribe the audio message exactly as spoken. Return only the transcribed text, nothing else." },
-                    ],
-                }],
-            };
-            const res = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) {
-                const errText = await res.text();
-                console.error(`[Transcription] Gemini API error (${res.status}): ${errText}`);
-                return null;
-            }
-            const data = await res.json() as any;
-            return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+        const providers: Array<(buf: ArrayBuffer, mime: string) => Promise<string | null>> = [];
+        if (primaryProvider === "openai") {
+            providers.push(transcribeWithOpenAI, transcribeWithGemini, transcribeWithGitHub);
+        } else if (primaryProvider === "github") {
+            providers.push(transcribeWithGitHub, transcribeWithOpenAI, transcribeWithGemini);
+        } else {
+            providers.push(transcribeWithGemini, transcribeWithOpenAI, transcribeWithGitHub);
         }
 
-        // ── OpenAI Whisper transcription (also used for GitHub Models) ────────
-        if (transcriptionProvider === "openai" || transcriptionProvider === "github") {
-            let apiKey: string;
-            let baseURL: string;
-            let whisperModel: string;
-
-            if (transcriptionProvider === "github") {
-                apiKey = process.env.GITHUB_TOKEN || "";
-                baseURL = process.env.GITHUB_BASE_URL ?? "https://models.github.ai/inference";
-                whisperModel = "openai/whisper-large";
-                if (!apiKey) {
-                    console.warn("[Transcription] GITHUB_TOKEN not set — cannot use GitHub transcription.");
-                    return null;
-                }
-            } else {
-                apiKey = process.env.OPENAI_API_KEY || "";
-                baseURL = "https://api.openai.com/v1";
-                whisperModel = process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1";
-                if (!apiKey) {
-                    console.warn("[Transcription] OPENAI_API_KEY not set — cannot use OpenAI transcription.");
-                    return null;
-                }
+        for (const providerFn of providers) {
+            const transcript = await providerFn(audioBuffer, mimeType);
+            if (transcript) {
+                return transcript;
             }
-
-            // Determine file extension from MIME type
-            const ext = mimeType === "audio/ogg" ? "ogg"
-                : mimeType === "audio/mpeg" ? "mp3"
-                : mimeType === "audio/mp4" ? "mp4"
-                : "ogg";
-
-            const formData = new FormData();
-            formData.append("file", new Blob([audioBuffer], { type: mimeType }), `audio.${ext}`);
-            formData.append("model", whisperModel);
-            formData.append("response_format", "text");
-
-            const res = await fetch(`${baseURL}/audio/transcriptions`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${apiKey}` },
-                body: formData,
-            });
-            if (!res.ok) {
-                const errText = await res.text();
-                console.error(`[Transcription] ${transcriptionProvider} Whisper error (${res.status}): ${errText}`);
-                return null;
-            }
-            const transcript = await res.text();
-            return transcript.trim() || null;
         }
 
-        console.warn(`[Transcription] Unknown TRANSCRIPTION_PROVIDER: "${transcriptionProvider}". Supported: gemini, openai, github`);
+        console.error("❌ [Transcription] All transcription providers failed or missing API keys.");
         return null;
     } catch (e) {
-        console.error("[Transcription] Audio transcription failed:", e);
+        console.error("[Transcription] Audio transcription pipeline failed:", e);
         return null;
     }
 }
@@ -377,6 +462,11 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
 export function startServer() {
     const server = app.listen(port, () => {
         console.log(`🚀 ToolTap server listening on port ${port}`);
+        // Initialise the graph after the port is bound (async — connects to Postgres)
+        initGraph().catch((err) => {
+            console.error("❌ [Server] Fatal: graph initialization failed:", err?.message ?? err);
+            process.exit(1);
+        });
     });
 
     // Keep Node process event loop alive indefinitely

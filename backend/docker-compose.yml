@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # ── Vector Database ──────────────────────────────────────────────────────────
   qdrant:
     image: qdrant/qdrant:latest
     container_name: tooltap-qdrant
@@ -10,3 +11,61 @@ services:
       - "6334:6334"
     volumes:
       - ./data/qdrant_storage:/qdrant/storage
+
+  # ── PostgreSQL — LangGraph Checkpointer (short-term) + Store (long-term) ────
+  postgres:
+    image: postgres:16-alpine
+    container_name: tooltap-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: tooltap
+      POSTGRES_PASSWORD: tooltap_secret
+      POSTGRES_DB: tooltap
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_INITDB_ARGS: --auth-host=trust
+    ports:
+      - "5433:5432"  # Use 5433 on host to avoid conflict with local Postgres on 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command: postgres -c hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tooltap -d tooltap"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis — Embedding LRU cache + BullMQ job queue ───────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: tooltap-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── RabbitMQ — Message queue / event bus (future pub-sub) ───────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: tooltap-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: tooltap
+      RABBITMQ_DEFAULT_PASS: tooltap_secret
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

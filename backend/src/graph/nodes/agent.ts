@@ -1,4 +1,4 @@
-import { createModel, createModelWithTools } from "../../llm/provider.js";
+import { createModel, createModelWithTools, createTokenCappedModel } from "../../llm/provider.js";
 import { ToolRegistry } from "../../tools/registry.js";
 import { AGENT_PROMPT } from "../../agent/prompts/agent.prompt.js";
 import { FORMATTER_PROMPT } from "../../agent/prompts/formatter.prompt.js";
@@ -10,6 +10,9 @@ import { z } from "zod";
 
 const model = createModel();
 
+// Token-capped model for the formatter — JSON output never needs >512 tokens
+const formatterModel = createTokenCappedModel(512);
+
 const registry = new ToolRegistry();
 const tools = registry.getTools();
 const modelWithTools = createModelWithTools(tools);
@@ -18,9 +21,6 @@ const modelWithTools = createModelWithTools(tools);
 export const toolNode = new ToolNode(tools);
 
 // ── ResponseIntent Zod schema for withStructuredOutput ─────────────────────
-// OpenAI strict mode requires ALL nested object properties in 'required'.
-// We use .nullable().default(null) on optional fields so they appear in required[]
-// but the model can still return null when not applicable.
 const ResponseIntentSchema = z.object({
     messageType: z.enum(["text", "buttons", "list", "image", "video", "audio", "document", "sticker", "location_request"])
         .describe("The optimal WhatsApp message format for this response."),
@@ -37,7 +37,6 @@ const ResponseIntentSchema = z.object({
         rows: z.array(z.object({
             id: z.string().describe("Unique row ID"),
             title: z.string().describe("Row title, max 24 chars"),
-            // MUST be required for OpenAI strict schema — use empty string when no description
             description: z.string().describe("Row description, max 72 chars. Use empty string if none."),
         })).describe("Rows in this section"),
     })).nullable().default(null).describe("List sections for 4+ selectable options. Null otherwise."),
@@ -48,9 +47,6 @@ const ResponseIntentSchema = z.object({
 
 /**
  * Agent Node: Core reasoning node for action-based tasks.
- *
- * Uses modelWithTools bound to all action tools (web search, weather, email, CRM, calendar).
- * History is trimmed at state reducer level (last 10 messages) so no slicing needed here.
  */
 export async function agentNode(state: AgentState): Promise<Partial<AgentState>> {
     const response = await modelWithTools.invoke([
@@ -73,17 +69,20 @@ export function shouldContinue(state: AgentState): "tools" | "formatter" {
 }
 
 /**
- * Formatter Node: Converts the final text response into a structured WhatsApp ResponseIntent.
+ * Formatter Node — Three-stage fast-path pipeline.
  *
- * Stage 1 — Zero-cost heuristic fast-path (0ms):
- *   If the response text contains NO interactive signals (no lists, no URLs, no location prompts,
- *   no button keywords) → return plain text immediately with 0 additional LLM calls.
- *   Covers ~60% of all turns (greetings, confirmations, simple answers).
+ * Stage 1 (0ms)   — Deterministic follow-up button parser.
+ *                   Catches ~80% of RAG responses that end with "Want to explore further?"
+ *                   This runs FIRST — before any heuristic — because the RAG system prompt
+ *                   mandates this exact format on every response.
  *
- * Stage 2 — withStructuredOutput (replaces raw LLM call + regex parsing):
- *   Uses LangChain's native structured output to get a COMPLETE, schema-validated JSON object.
- *   This permanently solves the truncated-JSON problem from streaming + token caps.
- *   The model CANNOT return partial JSON — it must complete the entire schema.
+ * Stage 2 (0ms)   — Plain-text heuristic.
+ *                   Catches greetings, confirmations, single-paragraph answers with no
+ *                   bullets, no URLs, and no interactive signals.
+ *
+ * Stage 3 (LLM)   — Token-capped JSON-mode formatter.
+ *                   Only reached for media links, location requests, or complex lists
+ *                   that don't match the deterministic patterns above.
  */
 export async function formatterNode(state: AgentState): Promise<Partial<AgentState>> {
     const lastMessage = state.messages[state.messages.length - 1];
@@ -92,46 +91,43 @@ export async function formatterNode(state: AgentState): Promise<Partial<AgentSta
         return { responseIntent: { messageType: "text", text: "I encountered an error." } };
     }
 
-    // Unwrap LangChain MessageContent (string | array of content blocks | object)
     const responseText = extractTextFromContent(lastMessage.content);
 
-    // ── Stage 1: Fast-path heuristic ─────────────────────────────────────────
-    // Skip LLM formatter ONLY for very short, single-paragraph plain conversational text.
-    // Send to LLM formatter if there are bullet points, numbered items, options, URLs,
-    // discovery questions, or structured options to ensure interactive button/list delivery.
-    const lower = responseText.toLowerCase();
+    // ── Stage 1: Deterministic follow-up button parser (0ms) ─────────────────
+    // Runs first — the RAG prompt mandates this format on nearly every response.
+    const deterministicIntent = parseFollowUpButtons(responseText);
+    if (deterministicIntent) {
+        console.log(`⚡ [Formatter] Stage 1 fast-path: deterministic buttons (${deterministicIntent.buttons?.length ?? 0} buttons, 0ms)`);
+        return { responseIntent: deterministicIntent };
+    }
 
+    // ── Stage 2: Plain-text heuristic (0ms) ───────────────────────────────────
+    // Safe to skip LLM if the text has no interactive signals whatsoever.
+    const lower = responseText.toLowerCase();
     const hasMediaUrl    = /https?:\/\/[^\s]+\.(jpg|jpeg|png|webp|gif|mp4|pdf|docx|xlsx|3gpp)(\?[^\s]*)?/i.test(responseText);
     const hasAnyUrl      = /https?:\/\/[^\s]+/.test(responseText);
     const hasLocation    = lower.includes("share your location") || lower.includes("nearest showroom")
         || lower.includes("send your location") || lower.includes("share location");
-
-    // Any bullet points or numbered lists (e.g. 1., 2., •, -, *)
     const hasListOrBullets = /(?:^|\n)\s*(?:[1-9][.)]|\*|-|•)\s+/.test(responseText);
-
-    // Interactive/choice/option indicators
     const hasInteractiveSignals =
         lower.includes("would you like") || lower.includes("what would you like") ||
         lower.includes("choose") || lower.includes("select") ||
         lower.includes("pick") || lower.includes("prefer") ||
         lower.includes("want to explore") || lower.includes("explore further") ||
         lower.includes("what's next") || lower.includes("next steps") ||
-        lower.includes("options") || lower.includes("question") ||
-        lower.includes("discovery") || lower.includes("following");
+        lower.includes("options") || lower.includes("discovery") ||
+        lower.includes("following") || lower.includes("available tools") ||
+        lower.includes("available options");
 
     if (!hasMediaUrl && !hasAnyUrl && !hasLocation && !hasListOrBullets && !hasInteractiveSignals) {
-        console.log(`⚡ [Formatter] Fast-path: short plain text, skipping LLM pass.`);
+        console.log(`⚡ [Formatter] Stage 2 fast-path: plain text, skipping LLM`);
         return { responseIntent: { messageType: "text", text: responseText } };
     }
 
-
-    // ── Stage 2: JSON-mode LLM pass — provider-agnostic structured output ─────
-    // withStructuredOutput has incompatible schema rules between Gemini and OpenAI.
-    // JSON mode works universally: we ask the model to return valid JSON, then
-    // parse + validate it with Zod manually. No schema restriction issues.
-    console.log(`🎨 [Formatter] Interactive signals detected — running JSON-mode formatter.`);
+    // ── Stage 3: Token-capped JSON-mode LLM formatter ─────────────────────────
+    console.log(`🎨 [Formatter] Stage 3: interactive signals detected — running JSON-mode formatter`);
     try {
-        const rawResponse = await model.invoke([
+        const rawResponse = await formatterModel.invoke([
             { role: "system", content: FORMATTER_PROMPT },
             {
                 role: "user",
@@ -145,7 +141,7 @@ export async function formatterNode(state: AgentState): Promise<Partial<AgentSta
         if (parsed && parsed.messageType) {
             const intent = parsed as ResponseIntent;
 
-            // Strip null values injected by schema defaults (not needed in ResponseIntent)
+            // Strip null values injected by schema defaults
             if (intent.header === null) delete intent.header;
             if (intent.footer === null) delete intent.footer;
             if (intent.buttons === null) delete intent.buttons;
@@ -170,12 +166,12 @@ export async function formatterNode(state: AgentState): Promise<Partial<AgentSta
                 delete intent.buttons;
             }
 
-            console.log(`🎨 [Formatter Result]: Formatted as '${intent.messageType}'`);
+            console.log(`🎨 [Formatter] Stage 3 result: '${intent.messageType}'`);
             return { responseIntent: intent };
         }
-        console.warn("[FormatterNode] Could not parse messageType from LLM response:", rawText.slice(0, 200));
+        console.warn("[Formatter] Could not parse messageType from LLM response:", rawText.slice(0, 200));
     } catch (error) {
-        console.warn("[FormatterNode] JSON-mode formatter failed, falling back to plain text:", (error as any)?.message || error);
+        console.warn("[Formatter] JSON-mode formatter failed, falling back to plain text:", (error as any)?.message || error);
     }
 
     return { responseIntent: { messageType: "text", text: responseText } };
@@ -183,16 +179,11 @@ export async function formatterNode(state: AgentState): Promise<Partial<AgentSta
 
 /**
  * Robustly extracts the first valid JSON object from raw LLM text.
- * Handles markdown code fences, trailing commentary, and mid-text JSON.
  */
 function parseJsonFromText(raw: string): any | null {
-    // Strip markdown fences first
     const stripped = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
-
-    // Try direct parse first (fastest path)
     try { return JSON.parse(stripped); } catch (_) {}
 
-    // Brace-depth scanner — finds the exact JSON object ignoring surrounding text
     const start = stripped.indexOf("{");
     if (start === -1) return null;
 
@@ -219,7 +210,7 @@ function parseJsonFromText(raw: string): any | null {
 }
 
 /**
- * Unwraps LangChain MessageContent (string | array of content blocks) into plain text.
+ * Unwraps LangChain MessageContent into plain text.
  */
 function extractTextFromContent(content: any): string {
     if (typeof content === "string") return content;
@@ -228,8 +219,78 @@ function extractTextFromContent(content: any): string {
             .map((chunk: any) => typeof chunk === "string" ? chunk : chunk?.text || chunk?.content || "")
             .join("");
     }
-    if (content && typeof content === "object" && content.text) {
-        return content.text;
-    }
+    if (content && typeof content === "object" && content.text) return content.text;
     return String(content || "");
+}
+
+/**
+ * Deterministically parses standard RAG follow-up buttons in 0ms.
+ *
+ * Matches the exact format the RAG system prompt mandates:
+ *   "*Want to explore further?*\n1. Option A\n2. Option B"
+ *
+ * Also matches agent dynamic interactive output:
+ *   "*What's next?*\n1. Step A\n2. Step B"
+ *   "*Available Tools:*\n1. Web Search — ...\n2. Weather — ..."  → list (4+ items)
+ */
+function parseFollowUpButtons(text: string): ResponseIntent | null {
+    // Match known interactive section headers
+    const headerRegex = /\n*\*?(?:Want to explore further|What's next|Next steps|Explore further|Suggested options|Available Tools|Available options|What would you like)\??:?\*?\n/i;
+    const match = text.match(headerRegex);
+    if (!match || match.index === undefined) return null;
+
+    const bodyText = text.slice(0, match.index).trim();
+    const optionsBlock = text.slice(match.index + match[0].length).trim();
+
+    if (!bodyText || !optionsBlock) return null;
+
+    const lines = optionsBlock.split("\n").map((l) => l.trim()).filter(Boolean);
+    const items: { id: string; title: string; description: string }[] = [];
+
+    for (const line of lines) {
+        // Match: "1. Title — Description" or "1. Title" or "• Title"
+        const itemMatch = line.match(/^(?:[1-9][.)]|\*|-|•)\s*(.+)$/);
+        if (itemMatch) {
+            const rawTitle = itemMatch[1]?.trim() ?? "";
+            if (!rawTitle) continue;
+
+            // Split "Title — Description" (for list items)
+            const dashIdx = rawTitle.search(/ [—–-] /);
+            const title = dashIdx > -1
+                ? rawTitle.slice(0, dashIdx).trim().slice(0, 24)
+                : rawTitle.slice(0, 24);
+            const description = dashIdx > -1
+                ? rawTitle.slice(dashIdx + 3).trim().slice(0, 72)
+                : "";
+
+            const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+            items.push({ id: id || `opt_${items.length + 1}`, title, description });
+        }
+    }
+
+    if (items.length === 0) return null;
+
+    // 1–3 items → buttons
+    if (items.length <= 3) {
+        return {
+            messageType: "buttons",
+            text: bodyText,
+            buttons: items.map(({ id, title }) => ({ id, title: title.slice(0, 20) })),
+        };
+    }
+
+    // 4–10 items → list menu
+    if (items.length <= 10) {
+        return {
+            messageType: "list",
+            text: bodyText,
+            listButtonText: "View Options",
+            listSections: [{
+                title: "Options",
+                rows: items.map(({ id, title, description }) => ({ id, title, description })),
+            }],
+        };
+    }
+
+    return null;
 }

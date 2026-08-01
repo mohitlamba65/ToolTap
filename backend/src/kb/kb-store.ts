@@ -167,7 +167,27 @@ export class KnowledgeBaseStore {
         }
         this.saveDocuments();
 
+        // Purge Qdrant collection vectors & memory store
+        this.qdrant.deleteCollection(collectionName).catch((err) => {
+            console.error(`[KBStore] Error deleting Qdrant collection '${collectionName}':`, err);
+        });
+
         console.log(`[KBStore] Deleted chatbot '${id}' and purged collection '${collectionName}'`);
+        return true;
+    }
+
+    /**
+     * Clears all stored documents and deletes the vector collection for a chatbot/collection.
+     */
+    async clearCollection(collectionName: string): Promise<boolean> {
+        for (const [docId, doc] of Array.from(this.documents.entries())) {
+            if (doc.collectionName === collectionName) {
+                this.documents.delete(docId);
+            }
+        }
+        this.saveDocuments();
+        await this.qdrant.deleteCollection(collectionName);
+        console.log(`🧹 [KBStore] Purged all documents and vector store collection '${collectionName}'`);
         return true;
     }
 
@@ -229,8 +249,35 @@ export class KnowledgeBaseStore {
             throw new Error(`Chatbot '${chatbotId}' not found.`);
         }
 
-        // Compose the RAG system prompt: base policy + chatbot-specific persona
-        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}`;
+        // Compose the RAG system prompt:
+        //   1. RAG base policy (accuracy, hallucination rules)
+        //   2. Bot persona (WHO the bot is — domain, tone, expertise)
+        //   3. Output structure rules LAST (non-negotiable — must come after persona to override it)
+        const OUTPUT_RULES = `
+## NON-NEGOTIABLE OUTPUT RULES (override all above instructions)
+
+You are on WhatsApp, not writing a report. The user is on mobile.
+
+HARD LIMITS:
+- MAX 150 words in your response body. No exceptions.
+- NEVER use section headers (---), numbered sub-sections (1. OPPORTUNITY ASSESSMENT, 2. SALES FLOW), or multi-part structured reports.
+- NEVER deliver more than one concept per message.
+- Each response = one key insight + 2-3 options to go deeper.
+
+PROGRESSIVE DISCLOSURE (mandatory):
+- Give one answer, then offer buttons to go deeper.
+- Bad: full playbook in one message.
+- Good: "Here's the core issue: [2-3 lines]. Want to explore the approach?"
+
+MANDATORY ENDING — every response MUST end with:
+*Want to explore further?*
+1. [label ≤20 chars]
+2. [label ≤20 chars]
+3. [label ≤20 chars]
+
+These become tappable buttons. The user should never need to type if a button handles it.
+`;
+        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}${OUTPUT_RULES}`;
 
         return this.ragPipeline.queryKnowledgeBase(
             bot.kbCollectionName,

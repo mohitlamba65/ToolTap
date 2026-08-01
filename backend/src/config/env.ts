@@ -34,16 +34,28 @@ export const env = {
     openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
     geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
 
-    // ── Voice Transcription Provider ─────────────────────────────────────────
-    // Supported: "gemini" | "openai" | "github"
-    // GitHub uses Whisper via OpenAI-compatible API.
+    // ── Voice Transcription & Text-To-Speech (TTS) ──────────────────────────
+    // Supported transcription: "openai" | "gemini" | "github"
+    // Supported TTS: "openai" | "gemini"
     transcriptionProvider: process.env.TRANSCRIPTION_PROVIDER ?? "gemini",
     openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL ?? "whisper-1",
     geminiTranscriptionModel: process.env.GEMINI_TRANSCRIPTION_MODEL ?? process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
 
-    // ── Mailgun Engine ──────────────────────────────────────────────────────
+    ttsProvider: process.env.TTS_PROVIDER ?? "openai",
+    openaiTtsModel: process.env.OPENAI_TTS_MODEL ?? "gpt-4o-mini-tts",
+    openaiTtsVoice: process.env.OPENAI_TTS_VOICE ?? "coral",
+    geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview",
+    geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
+
+    // ── Mailgun Engine & SMTP ─────────────────────────────────────────────
     mailgunApiKey: process.env.MAILGUN_API_KEY,
     mailgunDomain: process.env.MAILGUN_DOMAIN,
     mailgunBaseUrl: process.env.MAILGUN_BASE_URL ?? "https://api.mailgun.net",
-    mailgunSenderEmail: process.env.MAILGUN_SENDER_EMAIL ?? "eywhatsappbot43@gmail.com",
+    mailgunSenderEmail: process.env.MAILGUN_SENDER_EMAIL ?? process.env.EMAIL_FROM ?? "eywhatsappbot43@gmail.com",
+    emailFrom: process.env.EMAIL_FROM ?? "eywhatsappbot43@gmail.com",
+    smtpHost: process.env.SMTP_HOST ?? "smtp.gmail.com",
+    smtpPort: Number(process.env.SMTP_PORT || 587),
+    smtpSecure: process.env.SMTP_SECURE === "true",
+    smtpUser: process.env.SMTP_USER,
+    smtpPass: process.env.SMTP_PASS,
 };

@@ -1,49 +1,24 @@
-import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
+import { StateGraph, START, END, MemorySaver, InMemoryStore } from "@langchain/langgraph";
 import { AgentGraphState } from "./state.js";
 import { agentNode, shouldContinue, formatterNode, toolNode } from "./nodes/agent.js";
 import { deliveryNode } from "./nodes/delivery.js";
 import { orchestratorNode, shouldRouteFromOrchestrator } from "./nodes/orchestrator.js";
 import { ragNode, shouldEscalateToAgent } from "./nodes/rag.js";
 import { capabilityNode } from "./nodes/capability.js";
+import { setupMemory, createInMemoryStore } from "../memory/memory.js";
+import type { PostgresStore } from "../memory/memory.js";
 
 /**
  * ToolTap Unified LangGraph Workflow
  *
- * Replaces the old keyword-based router + disconnected RAG/formatter approach
- * with a fully agentic, context-aware graph where all capabilities share state.
- *
- * Architecture:
- *
- *   START
- *     │
- *     ▼
- *   orchestrator  ← LLM-based intent classifier (1 fast call)
- *     │               Knows ALL tools + ALL active chatbots
- *     ├── intent="capability" ──► capabilityNode (0 LLM calls, sets responseIntent directly) ──► delivery ──► END
- *     │
- *     ├── intent="rag" ──► ragNode ──► [abstained?] ──► formatter ──► delivery ──► END
- *     │                                    │
- *     │                                    └── [escalated] ──► agent ──► ...
- *     │
- *     └── intent="tool" ──► agent ──► [tool_calls?] ──► tools ──┐
- *                              │                                  │
- *                              └── [final_response] ──────────────┘
- *                                       │
- *                                       ▼
- *                                  formatter (withStructuredOutput — no truncation)
- *                                       │
- *                                       ▼
- *                                  delivery ──► END
- *
- * Key properties:
- * - All nodes share the same AgentState — RAG bots and agents CAN see each other's context
- * - RAG can escalate to tools if knowledge base is insufficient
- * - Formatter uses withStructuredOutput to guarantee complete JSON (no more truncation)
- * - History auto-trimmed to last 10 messages at state reducer level (not node level)
+ * Memory strategy:
+ *   Short-term : PostgresSaver  — per-thread checkpoints (survives restarts)
+ *   Long-term  : PostgresStore  — cross-session user data
+ *   Fallback   : MemorySaver + InMemoryStore (dev / Postgres unavailable)
  */
-export function createToolTapGraph() {
-    const workflow = new StateGraph(AgentGraphState)
-        // ── Nodes ──────────────────────────────────────────────────────────────
+
+function buildWorkflow() {
+    return new StateGraph(AgentGraphState)
         .addNode("orchestrator", orchestratorNode)
         .addNode("agent",        agentNode)
         .addNode("tools",        toolNode)
@@ -52,40 +27,55 @@ export function createToolTapGraph() {
         .addNode("formatter",    formatterNode)
         .addNode("delivery",     deliveryNode)
 
-        // ── Entry Point ────────────────────────────────────────────────────────
         .addEdge(START, "orchestrator")
 
-        // ── Orchestrator → Execution Nodes (conditional routing) ───────────────
         .addConditionalEdges("orchestrator", shouldRouteFromOrchestrator, {
             agent:      "agent",
             rag:        "rag",
             capability: "capability",
         })
 
-        // ── Agent → Tools loop or final response ───────────────────────────────
         .addConditionalEdges("agent", shouldContinue, {
             tools:     "tools",
             formatter: "formatter",
         })
 
-        // ── Tools → back to agent ──────────────────────────────────────────────
         .addEdge("tools", "agent")
 
-        // ── RAG → formatter (or escalate to agent if abstained) ───────────────
         .addConditionalEdges("rag", shouldEscalateToAgent, {
             formatter: "formatter",
             agent:     "agent",
         })
 
-        // ── Capability → delivery directly (already sets responseIntent, no LLM pass needed) ───
         .addEdge("capability", "delivery")
+        .addEdge("formatter",  "delivery")
+        .addEdge("delivery",   END);
+}
 
-        // ── Formatter → delivery ──────────────────────────────────────────────
-        .addEdge("formatter", "delivery")
+export type ToolTapGraph = ReturnType<typeof buildWorkflow> extends StateGraph<any, any, any, any, any, any>
+    ? ReturnType<ReturnType<typeof buildWorkflow>["compile"]>
+    : never;
 
-        // ── Delivery → END ────────────────────────────────────────────────────
-        .addEdge("delivery", END);
+/**
+ * Creates and compiles the LangGraph with Postgres memory (or in-process fallback).
+ * Returns the compiled graph and the store for external cross-session access.
+ */
+export async function createToolTapGraph(): Promise<{
+    graph: ReturnType<ReturnType<typeof buildWorkflow>["compile"]>;
+    store: PostgresStore | InMemoryStore | null;
+}> {
+    const workflow = buildWorkflow();
 
-    const checkpointer = new MemorySaver();
-    return workflow.compile({ checkpointer });
+    try {
+        const { checkpointer, store } = await setupMemory();
+        const graph = workflow.compile({ checkpointer });
+        console.log("✅ [Graph] Compiled with PostgresSaver + custom PostgresStore");
+        return { graph, store };
+    } catch (err: any) {
+        console.warn(`⚠️  [Graph] Postgres unavailable (${err?.message ?? err}). Using in-process MemorySaver.`);
+        const checkpointer = new MemorySaver();
+        const store = createInMemoryStore();
+        const graph = workflow.compile({ checkpointer });
+        return { graph, store };
+    }
 }

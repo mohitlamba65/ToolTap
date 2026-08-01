@@ -128,3 +128,20 @@ export function createModelWithTools(tools: any[]) {
     }
     return boundPrimary;
 }
+
+/**
+ * Creates a model with structured output (Zod schema) bound safely with fallbacks.
+ * Prevents "withStructuredOutput is not a function" errors when fallback wrappers are present.
+ */
+export function createStructuredModel<T extends any>(schema: T, name?: string) {
+    const { primaryModel, fallbacks } = getRawModels();
+    const options = name ? { name } : undefined;
+    const structuredPrimary = primaryModel.withStructuredOutput(schema, options);
+
+    if (fallbacks.length > 0) {
+        const structuredFallbacks = fallbacks.map((f: any) => f.withStructuredOutput(schema, options));
+        return structuredPrimary.withFallbacks(structuredFallbacks);
+    }
+    return structuredPrimary;
+}
+

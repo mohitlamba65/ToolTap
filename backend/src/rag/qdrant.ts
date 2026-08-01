@@ -2,6 +2,30 @@ import crypto from "node:crypto";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import type { ChunkMetadata, StructuredChunk } from "./types.js";
 import { createEmbeddings } from "./embeddings.js";
+import type { EmbeddingsInterface } from "./embeddings.js";
+
+// ── In-process Embedding LRU Cache ───────────────────────────────────────────
+// Avoids duplicate API calls for repeated or similar queries.
+// TTL: 5 minutes. Max size: 500 entries (evicts oldest on overflow).
+const EMBED_CACHE = new Map<string, { vector: number[]; ts: number }>();
+const EMBED_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+const EMBED_CACHE_MAX = 500;
+
+async function cachedEmbedQuery(text: string, embedder: EmbeddingsInterface): Promise<number[]> {
+    const key = text.trim().toLowerCase().slice(0, 500); // normalise key
+    const cached = EMBED_CACHE.get(key);
+    if (cached && Date.now() - cached.ts < EMBED_CACHE_TTL_MS) {
+        return cached.vector;
+    }
+    const vector = await embedder.embedQuery(text);
+    // Evict oldest entry if over capacity
+    if (EMBED_CACHE.size >= EMBED_CACHE_MAX) {
+        const oldestKey = EMBED_CACHE.keys().next().value;
+        if (oldestKey !== undefined) EMBED_CACHE.delete(oldestKey);
+    }
+    EMBED_CACHE.set(key, { vector, ts: Date.now() });
+    return vector;
+}
 
 /**
  * Qdrant Vector Database Manager
@@ -68,6 +92,25 @@ export class QdrantManager {
     }
 
     /**
+     * Deletes a collection from Qdrant Vector DB and clears memory store.
+     */
+    async deleteCollection(collectionName: string) {
+        if (this.isQdrantConnected && this.client) {
+            try {
+                const collections = await this.client.getCollections();
+                const exists = collections.collections.some((c) => c.name === collectionName);
+                if (exists) {
+                    await this.client.deleteCollection(collectionName);
+                    console.log(`[Qdrant] Deleted collection '${collectionName}' from Qdrant Vector DB`);
+                }
+            } catch (e) {
+                console.warn(`[Qdrant] Error deleting collection '${collectionName}':`, e);
+            }
+        }
+        this.inMemoryStore.delete(collectionName);
+    }
+
+    /**
      * Upserts structured chunks into Qdrant vector store with full payload metadata.
      */
     async upsertChunks(collectionName: string, chunks: StructuredChunk[]) {
@@ -85,7 +128,7 @@ export class QdrantManager {
                     const pointId = isValidUUID ? chunk.metadata.chunk_id : crypto.randomUUID();
                     return {
                         id: pointId,
-                        vector: vectors[idx],
+                        vector: vectors[idx] || [],
                         payload: {
                             text: chunk.text,
                             ...chunk.metadata,
@@ -94,7 +137,7 @@ export class QdrantManager {
                     };
                 });
 
-                await this.client.upsert(collectionName, { points });
+                await this.client.upsert(collectionName, { points: points as any });
                 console.log(`✅ [Qdrant] Successfully upserted ${chunks.length} chunks into Docker Qdrant collection '${collectionName}'`);
             } catch (e) {
                 console.error(`[Qdrant] Failed to upsert to Qdrant, falling back to memory store:`, e);
@@ -104,7 +147,11 @@ export class QdrantManager {
         // Store in memory store
         const store = this.inMemoryStore.get(collectionName) || [];
         for (let i = 0; i < chunks.length; i++) {
-            store.push({ vector: vectors[i], chunk: chunks[i] });
+            const vec = vectors[i];
+            const chk = chunks[i];
+            if (vec && chk) {
+                store.push({ vector: vec, chunk: chk });
+            }
         }
         this.inMemoryStore.set(collectionName, store);
     }
@@ -119,7 +166,7 @@ export class QdrantManager {
         metadataFilter?: Partial<ChunkMetadata>,
         topK = 10
     ): Promise<Array<{ chunk: StructuredChunk; score: number }>> {
-        const queryVector = await this.embeddings.embedQuery(query);
+        const queryVector = await cachedEmbedQuery(query, this.embeddings);
 
         if (this.isQdrantConnected && this.client) {
             try {
@@ -136,13 +183,13 @@ export class QdrantManager {
                 const searchResult = await this.client.search(collectionName, {
                     vector: queryVector,
                     limit: topK,
-                    filter,
+                    ...(filter ? { filter: filter as any } : {}),
                     with_payload: true,
                 });
 
                 if (searchResult.length > 0) {
                     return searchResult.map((hit) => {
-                        const payload = hit.payload as any;
+                        const payload = (hit.payload || {}) as any;
                         const text = payload.text || "";
                         delete payload.text;
 
@@ -183,10 +230,13 @@ function cosineSimilarity(vecA: number[], vecB: number[]): number {
     let dotProduct = 0;
     let normA = 0;
     let normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
+    const len = Math.min(vecA.length, vecB.length);
+    for (let i = 0; i < len; i++) {
+        const valA = vecA[i] || 0;
+        const valB = vecB[i] || 0;
+        dotProduct += valA * valB;
+        normA += valA * valA;
+        normB += valB * valB;
     }
     if (normA === 0 || normB === 0) return 0;
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));

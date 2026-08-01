@@ -26,7 +26,7 @@ export class StructureAwareChunker {
         title: string,
         category = "general",
         tags: string[] = ["documentation"],
-        effectiveDate: string = new Date().toISOString().split("T")[0]
+        effectiveDate: string = new Date().toISOString().split("T")[0] || new Date().toISOString()
     ): StructuredChunk[] {
         const lines = content.split(/\r?\n/);
         const sections: Array<{ headingPath: string; text: string }> = [];
@@ -37,7 +37,7 @@ export class StructureAwareChunker {
         for (const line of lines) {
             const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
 
-            if (headingMatch) {
+            if (headingMatch && headingMatch[1] && headingMatch[2]) {
                 // Save previous section if it has content
                 if (currentSectionText.length > 0) {
                     sections.push({
