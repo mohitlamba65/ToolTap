@@ -33,6 +33,12 @@ export const env = {
     embeddingProvider: process.env.EMBEDDING_PROVIDER ?? process.env.MODEL_PROVIDER ?? "gemini",
     openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
     geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
+    embeddingDimensions: Number(
+        process.env.EMBEDDING_DIMENSIONS ??
+        ((process.env.EMBEDDING_PROVIDER ?? process.env.MODEL_PROVIDER ?? "gemini").toLowerCase() === "gemini"
+            ? 768
+            : 1536)
+    ),
 
     // ── Voice Transcription & Text-To-Speech (TTS) ──────────────────────────
     // Supported transcription: "openai" | "gemini" | "github"

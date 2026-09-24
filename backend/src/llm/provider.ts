@@ -10,8 +10,6 @@ import { ModelProvider } from "./config.js";
  */
 function getRawModels(maxOutputTokens?: number) {
     let primaryModel: any;
-    const fallbacks: any[] = [];
-
     const tokenCap = maxOutputTokens ? { maxTokens: maxOutputTokens } : {};
     const tokenCapGemini = maxOutputTokens ? { maxOutputTokens } : {};
 
@@ -22,6 +20,8 @@ function getRawModels(maxOutputTokens?: number) {
                 apiKey: env.githubToken,
                 model: env.githubModel,
                 temperature: 0,
+                timeout: 20_000,
+                maxRetries: 1,
                 configuration: { baseURL: env.githubBaseUrl },
                 ...tokenCap,
             });
@@ -33,6 +33,8 @@ function getRawModels(maxOutputTokens?: number) {
                 apiKey: env.openaiKey,
                 model: env.openaiModel,
                 temperature: 0,
+                timeout: 20_000,
+                maxRetries: 1,
                 ...tokenCap,
             });
             break;
@@ -43,23 +45,9 @@ function getRawModels(maxOutputTokens?: number) {
                 apiKey: env.googleKey,
                 model: env.geminiModel,
                 temperature: 0,
+                maxRetries: 1,
                 ...tokenCapGemini,
             });
-            // Gemini fallback chain
-            fallbacks.push(
-                new ChatGoogleGenerativeAI({
-                    apiKey: env.googleKey,
-                    model: "gemini-2.0-flash",
-                    temperature: 0,
-                    ...tokenCapGemini,
-                }),
-                new ChatGoogleGenerativeAI({
-                    apiKey: env.googleKey,
-                    model: "gemini-1.5-flash",
-                    temperature: 0,
-                    ...tokenCapGemini,
-                })
-            );
             break;
 
         case ModelProvider.OLLAMA:
@@ -75,73 +63,36 @@ function getRawModels(maxOutputTokens?: number) {
             throw new Error(`Unsupported MODEL_PROVIDER: "${env.provider}". Supported: openai, gemini, github, ollama`);
     }
 
-    // Universal OpenAI fallback (if openai key exists and we're not already on openai)
-    if (env.openaiKey && env.provider !== ModelProvider.OPENAI && env.provider !== ModelProvider.GITHUB) {
-        fallbacks.push(
-            new ChatOpenAI({
-                apiKey: env.openaiKey,
-                model: "gpt-4o-mini",
-                temperature: 0,
-                ...tokenCap,
-            })
-        );
-    }
-
-    return { primaryModel, fallbacks };
+    return primaryModel;
 }
 
 /**
- * Creates the primary LLM instance with automatic fallback chain.
- * Uses MODEL_PROVIDER from .env to select the backend.
+ * Creates the primary LLM instance.
+ * Uses MODEL_PROVIDER from .env to select the backend. No serial fallback chain.
  */
 export function createModel() {
-    const { primaryModel, fallbacks } = getRawModels();
-    if (fallbacks.length > 0) {
-        return primaryModel.withFallbacks(fallbacks);
-    }
-    return primaryModel;
+    return getRawModels();
 }
 
 /**
  * Creates the same configured model with an output token cap.
- * Used in the formatter node to avoid truncated JSON from streaming models.
- * Cap is applied at constructor level (not via .bind()) to avoid RunnableWithFallbacks issues.
  */
 export function createTokenCappedModel(maxOutputTokens = 1024) {
-    const { primaryModel, fallbacks } = getRawModels(maxOutputTokens);
-    if (fallbacks.length > 0) {
-        return primaryModel.withFallbacks(fallbacks);
-    }
-    return primaryModel;
+    return getRawModels(maxOutputTokens);
 }
 
 /**
  * Creates a model with action tools bound (for the agent reasoning node).
  */
 export function createModelWithTools(tools: any[]) {
-    const { primaryModel, fallbacks } = getRawModels();
-    const boundPrimary = primaryModel.bindTools(tools);
-
-    if (fallbacks.length > 0) {
-        const boundFallbacks = fallbacks.map((f) => f.bindTools(tools));
-        return boundPrimary.withFallbacks(boundFallbacks);
-    }
-    return boundPrimary;
+    return getRawModels().bindTools(tools);
 }
 
 /**
- * Creates a model with structured output (Zod schema) bound safely with fallbacks.
- * Prevents "withStructuredOutput is not a function" errors when fallback wrappers are present.
+ * Creates a model with structured output (Zod schema).
  */
 export function createStructuredModel<T extends any>(schema: T, name?: string) {
-    const { primaryModel, fallbacks } = getRawModels();
     const options = name ? { name } : undefined;
-    const structuredPrimary = primaryModel.withStructuredOutput(schema, options);
-
-    if (fallbacks.length > 0) {
-        const structuredFallbacks = fallbacks.map((f: any) => f.withStructuredOutput(schema, options));
-        return structuredPrimary.withFallbacks(structuredFallbacks);
-    }
-    return structuredPrimary;
+    return getRawModels().withStructuredOutput(schema, options);
 }
 

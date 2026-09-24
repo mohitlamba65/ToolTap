@@ -87,6 +87,46 @@ app.post("/api/provider", (req: Request, res: Response) => {
     }
 });
 
+function formatDisplayPhone(raw: string | undefined): string | null {
+    if (!raw) return null;
+    const trimmed = raw.replace(/^whatsapp:/i, "").trim();
+    return trimmed || null;
+}
+
+app.get("/api/status", (_req: Request, res: Response) => {
+    const provider = currentProvider;
+    const displayPhone = formatDisplayPhone(
+        process.env.WHATSAPP_DISPLAY_NUMBER ||
+        (provider === "twilio" ? process.env.TWILIO_WHATSAPP_NUMBER : undefined)
+    );
+    const tokenConfigured = provider === "twilio"
+        ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
+        : Boolean(process.env.WHATSAPP_API_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+    const assistants = kbStore.getChatbots().filter((b) => b.enabled);
+    const documents = kbStore.getDocuments();
+
+    res.json({
+        provider,
+        displayPhone,
+        waMeUrl: displayPhone
+            ? `https://wa.me/${displayPhone.replace(/[^\d]/g, "")}`
+            : null,
+        tokenConfigured,
+        live: tokenConfigured,
+        assistantCount: assistants.length,
+        documentCount: documents.length,
+        channelLabel: provider === "twilio" ? "Twilio" : "WhatsApp Cloud API",
+        setupHint: provider === "twilio"
+            ? "Join the Twilio sandbox from your phone, then message the sandbox number shown here."
+            : "Until the app is live, only numbers you add in Meta Developer → WhatsApp → API Setup can message this business number.",
+    });
+});
+
+app.get("/api/documents", (req: Request, res: Response) => {
+    const collection = typeof req.query.collection === "string" ? req.query.collection : undefined;
+    res.json({ documents: kbStore.getDocuments(collection) });
+});
+
 // Chatbot Management REST APIs
 app.get("/api/chatbots", (_req: Request, res: Response) => {
     res.json({ chatbots: kbStore.getChatbots() });
@@ -413,8 +453,7 @@ async function transcribeWithGitHub(audioBuffer: ArrayBuffer, mimeType: string):
 }
 
 /**
- * Downloads audio from Meta CDN and transcribes it with automatic failover:
- * Primary provider -> Secondary providers (OpenAI / Gemini / GitHub).
+ * Downloads audio from Meta CDN and transcribes with the configured primary provider only.
  */
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
     const apiToken = process.env.WHATSAPP_API_TOKEN || "";
@@ -434,23 +473,15 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
         const rawContentType = audioRes.headers.get("content-type") || "audio/ogg";
         const mimeType = (rawContentType.split(";")[0] || "audio/ogg").trim();
 
-        const providers: Array<(buf: ArrayBuffer, mime: string) => Promise<string | null>> = [];
-        if (primaryProvider === "openai") {
-            providers.push(transcribeWithOpenAI, transcribeWithGemini, transcribeWithGitHub);
-        } else if (primaryProvider === "github") {
-            providers.push(transcribeWithGitHub, transcribeWithOpenAI, transcribeWithGemini);
-        } else {
-            providers.push(transcribeWithGemini, transcribeWithOpenAI, transcribeWithGitHub);
-        }
+        const primaryFn =
+            primaryProvider === "gemini" ? transcribeWithGemini
+            : primaryProvider === "github" ? transcribeWithGitHub
+            : transcribeWithOpenAI;
 
-        for (const providerFn of providers) {
-            const transcript = await providerFn(audioBuffer, mimeType);
-            if (transcript) {
-                return transcript;
-            }
-        }
+        const transcript = await primaryFn(audioBuffer, mimeType);
+        if (transcript) return transcript;
 
-        console.error("❌ [Transcription] All transcription providers failed or missing API keys.");
+        console.error(`❌ [Transcription] Primary provider '${primaryProvider}' failed or missing API keys.`);
         return null;
     } catch (e) {
         console.error("[Transcription] Audio transcription pipeline failed:", e);

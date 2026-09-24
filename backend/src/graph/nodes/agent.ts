@@ -1,4 +1,4 @@
-import { createModel, createModelWithTools, createTokenCappedModel } from "../../llm/provider.js";
+import { createModelWithTools, createTokenCappedModel } from "../../llm/provider.js";
 import { ToolRegistry } from "../../tools/registry.js";
 import { AGENT_PROMPT } from "../../agent/prompts/agent.prompt.js";
 import { FORMATTER_PROMPT } from "../../agent/prompts/formatter.prompt.js";
@@ -8,9 +8,6 @@ import { AIMessage } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
 
-const model = createModel();
-
-// Token-capped model for the formatter — JSON output never needs >512 tokens
 const formatterModel = createTokenCappedModel(512);
 
 const registry = new ToolRegistry();

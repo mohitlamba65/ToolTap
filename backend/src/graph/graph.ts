@@ -3,10 +3,11 @@ import { AgentGraphState } from "./state.js";
 import { agentNode, shouldContinue, formatterNode, toolNode } from "./nodes/agent.js";
 import { deliveryNode } from "./nodes/delivery.js";
 import { orchestratorNode, shouldRouteFromOrchestrator } from "./nodes/orchestrator.js";
-import { ragNode, shouldEscalateToAgent } from "./nodes/rag.js";
+import { ragNode } from "./nodes/rag.js";
 import { capabilityNode } from "./nodes/capability.js";
 import { setupMemory, createInMemoryStore } from "../memory/memory.js";
 import type { PostgresStore } from "../memory/memory.js";
+import { globalVectorStore } from "../rag/pgvector.js";
 
 /**
  * ToolTap Unified LangGraph Workflow
@@ -42,10 +43,7 @@ function buildWorkflow() {
 
         .addEdge("tools", "agent")
 
-        .addConditionalEdges("rag", shouldEscalateToAgent, {
-            formatter: "formatter",
-            agent:     "agent",
-        })
+        .addEdge("rag", "formatter")
 
         .addEdge("capability", "delivery")
         .addEdge("formatter",  "delivery")
@@ -68,8 +66,13 @@ export async function createToolTapGraph(): Promise<{
 
     try {
         const { checkpointer, store } = await setupMemory();
+        try {
+            await globalVectorStore.ensureReady();
+        } catch (vecErr: any) {
+            console.error("❌ [Graph] pgvector setup failed:", vecErr?.message ?? vecErr);
+        }
         const graph = workflow.compile({ checkpointer });
-        console.log("✅ [Graph] Compiled with PostgresSaver + custom PostgresStore");
+        console.log("✅ [Graph] Compiled with PostgresSaver");
         return { graph, store };
     } catch (err: any) {
         console.warn(`⚠️  [Graph] Postgres unavailable (${err?.message ?? err}). Using in-process MemorySaver.`);

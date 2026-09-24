@@ -13,7 +13,7 @@ ToolTap is an enterprise-grade AI WhatsApp agent architecture engineered for low
 * **📱 Adaptive Interactive Messaging**:
   * **1–3 Options**: Automatically rendered as **WhatsApp Reply Buttons** (≤20 char smart word-boundary labels).
   * **4–10 Options**: Automatically promoted into a **WhatsApp Interactive List Menu** (`View Options`) with custom section titles and descriptions (up to 72 chars).
-* **📚 Knowledge Base & Semantic RAG**: Integrated with vector retrieval (Qdrant & local store) supporting multiple domain chatbots (e.g. Sales Frameworks, Advisory Assistants).
+* **📚 Knowledge Base & Semantic RAG**: Postgres pgvector retrieval per chatbot. Operators upload any documents; answers are grounded in that bot's collection only.
 * **🛠️ Action Tool Suite**:
   * **Web Search**: Real-time news, search, and factual validation via Tavily.
   * **Weather**: Live city forecasts via OpenWeather API.
@@ -52,7 +52,7 @@ ToolTap is an enterprise-grade AI WhatsApp agent architecture engineered for low
 
 ### 1. Prerequisites
 * **Node.js**: v18+
-* **Docker & Docker Compose**: Required for PostgreSQL, Redis, and Qdrant Vector DB.
+* **Docker & Docker Compose**: Required for PostgreSQL with the pgvector extension.
 
 ### 2. Installation
 ```bash
@@ -76,10 +76,19 @@ Key environment settings:
 * `TAVILY_API_KEY` & `OPENWEATHER_API_KEY`: API keys for action tools.
 
 ### 4. Run Services via Docker
-Start PostgreSQL, Redis, and Qdrant vector database:
+Start PostgreSQL with pgvector:
 ```bash
 docker-compose up -d
 ```
+
+If you previously ran Qdrant/Redis/RabbitMQ from this compose file, they are no longer used. Recreate Postgres so the `vector` extension is available:
+
+```bash
+docker-compose down
+docker-compose up -d
+```
+
+If `CREATE EXTENSION vector` fails on an old volume, run `docker-compose down -v` once (this wipes local DB data) then `up -d` again.
 
 ### 5. Start Development Server
 ```bash
@@ -102,8 +111,8 @@ See [.env.example](.env.example) for a complete list of supported variables:
 | `OPENAI_API_KEY` | Key for OpenAI models, Whisper STT, and TTS |
 | `WHATSAPP_API_TOKEN` | Meta WhatsApp Cloud API access token |
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Business phone number ID |
-| `POSTGRES_URL` | PostgreSQL connection string |
-| `REDIS_HOST` | Redis host for caching and job queue |
+| `POSTGRES_URL` | PostgreSQL connection string (checkpoints + pgvector) |
+| `EMBEDDING_DIMENSIONS` | Vector size: 1536 for OpenAI `text-embedding-3-small`, 768 for Gemini |
 
 ---
 
@@ -118,7 +127,7 @@ backend/
 │   │   └── nodes/        # orchestrator, agent, rag, capability, formatter, delivery
 │   ├── kb/               # Knowledge base vector store & document chunking
 │   ├── llm/              # Provider models & fallback chain factories
-│   ├── rag/              # RAG retrieval pipeline & system prompts
+│   ├── rag/              # pgvector store, chunking, embeddings, RAG pipeline
 │   ├── tools/            # Web search, weather, email, CRM, calendar tools
 │   └── index.ts          # Server entry point & Express webhook setup
 ├── .env.example          # Environment template

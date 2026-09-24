@@ -15,14 +15,14 @@ const { Pool } = pg;
 
 let pool: InstanceType<typeof Pool> | null = null;
 
-function buildConnectionString(): string {
+export function buildConnectionString(): string {
     return (
         process.env.POSTGRES_URL ??
-        `postgresql://${process.env.POSTGRES_USER ?? "tooltap"}:${process.env.POSTGRES_PASSWORD ?? "tooltap_secret"}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5432"}/${process.env.POSTGRES_DB ?? "tooltap"}?sslmode=disable`
+        `postgresql://${process.env.POSTGRES_USER ?? "tooltap"}:${process.env.POSTGRES_PASSWORD ?? "tooltap_secret"}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5433"}/${process.env.POSTGRES_DB ?? "tooltap"}?sslmode=disable`
     );
 }
 
-function getPool(): InstanceType<typeof Pool> {
+export function getPool(): InstanceType<typeof Pool> {
     if (!pool) {
         const connStr = buildConnectionString(); // includes ?sslmode=disable
         pool = new Pool({

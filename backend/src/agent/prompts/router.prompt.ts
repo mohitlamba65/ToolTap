@@ -29,7 +29,7 @@ Respond ONLY with this JSON (no explanation, no markdown):
 ## Examples
 
 User: "hi" → { "intent": "conversational", "confidence": 0.99, "reasoning": "Simple greeting." }
-User: "What Honda bikes do you have?" → { "intent": "knowledge", "confidence": 0.92, "reasoning": "Query about Honda bikes matches Knowledge Base domain." }
+User: "What is your return policy?" → { "intent": "knowledge", "confidence": 0.92, "reasoning": "Query matches a configured knowledge-base domain." }
 User: "Search for latest AI news" → { "intent": "tool", "confidence": 0.97, "reasoning": "User explicitly wants a web search." }
 User: "Send email to..." → { "intent": "tool", "confidence": 0.98, "reasoning": "Explicit email send action required." }
 User: "Do the thing" → { "intent": "clarification", "confidence": 0.90, "reasoning": "Request is too vague to route." }

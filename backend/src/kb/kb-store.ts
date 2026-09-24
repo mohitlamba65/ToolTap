@@ -1,10 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { CustomChatbot, RAGResult } from "../rag/types.js";
 import { StructureAwareChunker } from "../rag/chunker.js";
-import { globalQdrantManager } from "../rag/qdrant.js";
+import { globalVectorStore } from "../rag/pgvector.js";
 import { SemanticRAGPipeline } from "../rag/pipeline.js";
 import { RAG_PROMPT } from "../agent/prompts/rag.prompt.js";
+import fs from "node:fs";
+import path from "node:path";
 
 export interface StoredDocument {
     id: string;
@@ -19,9 +19,9 @@ export interface StoredDocument {
 
 /**
  * Knowledge Base & Chatbot Store
- * 
- * Manages custom chatbots, persistent knowledge bases, document ingestion,
- * and automatic vector re-hydration across server restarts.
+ *
+ * Chatbot configs and raw documents stay on disk (JSON).
+ * Vectors live in Postgres (pgvector) and are NOT re-embedded on every boot.
  */
 export class KnowledgeBaseStore {
     private dataDir = path.resolve(process.cwd(), "data");
@@ -32,14 +32,14 @@ export class KnowledgeBaseStore {
     private documents: Map<string, StoredDocument> = new Map();
 
     private chunker = new StructureAwareChunker();
-    private qdrant = globalQdrantManager;
+    private vectors = globalVectorStore;
     private ragPipeline = new SemanticRAGPipeline();
 
     constructor() {
         this.ensureStorage();
         this.loadChatbots();
         this.loadDocuments();
-        this.initStore().catch(err => {
+        this.initStore().catch((err) => {
             console.error("[KBStore] Non-fatal initialization error:", err);
         });
     }
@@ -96,36 +96,44 @@ export class KnowledgeBaseStore {
         }
     }
 
+    /**
+     * Connects to pgvector. Only embeds documents.json if the vector table is empty
+     * (one-time backfill after a fresh database). Existing vectors are left alone.
+     */
     private async initStore() {
-        // Re-hydrate stored documents into Qdrant vector memory on startup
+        await this.vectors.ensureReady();
+        const existing = await this.vectors.countAll();
+        if (existing > 0) {
+            console.log(`✅ [KBStore] pgvector already has ${existing} chunk(s) — skipping re-embed`);
+            return;
+        }
+        if (this.documents.size === 0) return;
+
         let totalChunks = 0;
         for (const doc of this.documents.values()) {
             const chunks = this.chunker.chunkDocument(doc.content, doc.source, doc.title, doc.category, doc.tags);
-            await this.qdrant.upsertChunks(doc.collectionName, chunks);
+            await this.vectors.upsertChunks(doc.collectionName, chunks, doc.id);
             totalChunks += chunks.length;
         }
-        if (this.documents.size > 0) {
-            console.log(`✅ [KBStore] Loaded ${totalChunks} vector chunk(s) across ${this.documents.size} document(s) into memory store.`);
-        }
+        console.log(`✅ [KBStore] One-time backfill: ${totalChunks} chunk(s) from ${this.documents.size} document(s)`);
     }
 
-    /**
-     * Gets all custom chatbots.
-     */
     getChatbots(): CustomChatbot[] {
         return Array.from(this.chatbots.values());
     }
 
-    /**
-     * Gets a single chatbot by ID.
-     */
+    getDocuments(collectionName?: string) {
+        const list = Array.from(this.documents.values());
+        const filtered = collectionName
+            ? list.filter((d) => d.collectionName === collectionName)
+            : list;
+        return filtered.map(({ content: _content, ...meta }) => meta);
+    }
+
     getChatbot(id: string): CustomChatbot | undefined {
         return this.chatbots.get(id);
     }
 
-    /**
-     * Creates or updates a custom chatbot.
-     */
     saveChatbot(botData: Omit<CustomChatbot, "id" | "createdAt" | "updatedAt"> & { id?: string }): CustomChatbot {
         const id = botData.id || `bot_${Math.random().toString(36).substring(2, 9)}`;
         const existing = this.chatbots.get(id);
@@ -148,9 +156,6 @@ export class KnowledgeBaseStore {
         return chatbot;
     }
 
-    /**
-     * Deletes a chatbot and purges its stored documents.
-     */
     deleteChatbot(id: string): boolean {
         const bot = this.chatbots.get(id);
         if (!bot) return false;
@@ -159,7 +164,6 @@ export class KnowledgeBaseStore {
         this.chatbots.delete(id);
         this.saveChatbots();
 
-        // Purge documents for this chatbot's collection
         for (const [docId, doc] of Array.from(this.documents.entries())) {
             if (doc.collectionName === collectionName) {
                 this.documents.delete(docId);
@@ -167,18 +171,14 @@ export class KnowledgeBaseStore {
         }
         this.saveDocuments();
 
-        // Purge Qdrant collection vectors & memory store
-        this.qdrant.deleteCollection(collectionName).catch((err) => {
-            console.error(`[KBStore] Error deleting Qdrant collection '${collectionName}':`, err);
+        this.vectors.deleteCollection(collectionName).catch((err) => {
+            console.error(`[KBStore] Error deleting vector collection '${collectionName}':`, err);
         });
 
         console.log(`[KBStore] Deleted chatbot '${id}' and purged collection '${collectionName}'`);
         return true;
     }
 
-    /**
-     * Clears all stored documents and deletes the vector collection for a chatbot/collection.
-     */
     async clearCollection(collectionName: string): Promise<boolean> {
         for (const [docId, doc] of Array.from(this.documents.entries())) {
             if (doc.collectionName === collectionName) {
@@ -186,15 +186,11 @@ export class KnowledgeBaseStore {
             }
         }
         this.saveDocuments();
-        await this.qdrant.deleteCollection(collectionName);
-        console.log(`🧹 [KBStore] Purged all documents and vector store collection '${collectionName}'`);
+        await this.vectors.deleteCollection(collectionName);
+        console.log(`🧹 [KBStore] Purged documents and vectors for '${collectionName}'`);
         return true;
     }
 
-    /**
-     * Ingests a raw text/markdown document into a chatbot's knowledge base.
-     * Persists to disk so vectors are preserved across backend restarts.
-     */
     async ingestDocument(
         collectionName: string,
         content: string,
@@ -219,9 +215,9 @@ export class KnowledgeBaseStore {
         this.saveDocuments();
 
         const chunks = this.chunker.chunkDocument(content, source, title, category, tags);
-        await this.qdrant.upsertChunks(collectionName, chunks);
+        await this.vectors.upsertChunks(collectionName, chunks, docId);
 
-        console.log(`✅ [KBStore] Ingested ${chunks.length} chunks into collection '${collectionName}' (${title})`);
+        console.log(`✅ [KBStore] Ingested ${chunks.length} chunks into '${collectionName}' (${title})`);
 
         return {
             collectionName,
@@ -231,12 +227,9 @@ export class KnowledgeBaseStore {
     }
 
     /**
-     * Executes RAG query for a specific chatbot.
-     *
-     * @param chatbotId - The chatbot to query
-     * @param query - The clean semantic query (already extracted from button/list reply wrappers)
-     * @param conversationContext - Recent conversation turns (for session continuity)
-     * @param previousAnswers - Summary of previously given AI answers (for deduplication)
+     * Grounded query against whatever documents this chatbot owns.
+     * Persona comes from the chatbot record (operator-defined). Grounding and
+     * WhatsApp output rules are generic — not tied to any one tenant or document.
      */
     async queryChatbot(
         chatbotId: string,
@@ -249,46 +242,18 @@ export class KnowledgeBaseStore {
             throw new Error(`Chatbot '${chatbotId}' not found.`);
         }
 
-        // Compose the RAG system prompt:
-        //   1. RAG base policy (accuracy, hallucination rules)
-        //   2. Bot persona (WHO the bot is — domain, tone, expertise)
-        //   3. Output structure rules LAST (non-negotiable — must come after persona to override it)
-        const OUTPUT_RULES = `
-## NON-NEGOTIABLE OUTPUT RULES (override all above instructions)
-
-You are on WhatsApp, not writing a report. The user is on mobile.
-
-HARD LIMITS:
-- MAX 150 words in your response body. No exceptions.
-- NEVER use section headers (---), numbered sub-sections (1. OPPORTUNITY ASSESSMENT, 2. SALES FLOW), or multi-part structured reports.
-- NEVER deliver more than one concept per message.
-- Each response = one key insight + 2-3 options to go deeper.
-
-PROGRESSIVE DISCLOSURE (mandatory):
-- Give one answer, then offer buttons to go deeper.
-- Bad: full playbook in one message.
-- Good: "Here's the core issue: [2-3 lines]. Want to explore the approach?"
-
-MANDATORY ENDING — every response MUST end with:
-*Want to explore further?*
-1. [label ≤20 chars]
-2. [label ≤20 chars]
-3. [label ≤20 chars]
-
-These become tappable buttons. The user should never need to type if a button handles it.
-`;
-        const ragSystemPrompt = `${RAG_PROMPT}\n\n## Your Chatbot Persona\n${bot.systemPrompt || "You are a helpful assistant for this business."}${OUTPUT_RULES}`;
+        const persona = (bot.systemPrompt || "You are a helpful assistant for this knowledge base.").trim();
+        const ragSystemPrompt = `${persona}\n\n${RAG_PROMPT}`;
 
         return this.ragPipeline.queryKnowledgeBase(
             bot.kbCollectionName,
             query,
             ragSystemPrompt,
-            0.1,             // similarityThreshold
-            previousAnswers, // deduplication: what was already told to the user
-            conversationContext // recent conversation turns
+            0.15,
+            previousAnswers,
+            conversationContext
         );
     }
-
 }
 
 export const kbStore = new KnowledgeBaseStore();
