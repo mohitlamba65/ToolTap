@@ -17,7 +17,7 @@ export function Setup({ status, chatbots, documentCount, sentHi, onSentHi, onPag
       done: Boolean(status?.tokenConfigured),
       body: status?.live
         ? `Replies will send through ${status.channelLabel}.`
-        : "Add your Cloud API token (or Twilio credentials) on the server, then refresh.",
+        : "Add your Cloud API token (or Twilio credentials) in Settings, then come back here.",
       action: { label: "Open Settings", page: "settings" as PageId },
     },
     {

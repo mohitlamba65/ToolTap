@@ -1,7 +1,9 @@
-import { useState } from "react";
-import type { Chatbot, PageId, Status, WaMessage } from "../types";
+import { useEffect, useState } from "react";
+import type { Chatbot, PageId, RagSource, Status, WaMessage } from "../types";
 import { WhatsAppPhone, buildCapabilityList } from "../components/WhatsAppPhone";
-import { userText } from "../parseReply";
+import { PipelineStepper } from "../components/PipelineStepper";
+import { parseAssistantReply, userText } from "../parseReply";
+import { api } from "../api";
 
 interface Props {
   status: Status | null;
@@ -11,31 +13,102 @@ interface Props {
 }
 
 export function Home({ status, chatbots, onPage, setupDone }: Props) {
-  const [messages, setMessages] = useState<WaMessage[]>(() => demoStart(chatbots, status));
+  const [messages, setMessages] = useState<WaMessage[]>(() => demoStart(chatbots));
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [hint, setHint] = useState(true);
+  const [sources, setSources] = useState<RagSource[]>([]);
+  const [showSources, setShowSources] = useState(false);
 
   const phone = status?.displayPhone;
   const live = Boolean(status?.live);
+  const bot = chatbots[0];
 
-  const handleChoice = (title: string) => {
-    const bot = chatbots.find((b) => b.name.toLowerCase().includes(title.toLowerCase().slice(0, 12))) || chatbots[0];
-    setMessages((prev) => [
-      ...prev,
-      userText(title, `u-${prev.length}`),
-      {
-        id: `a-${prev.length}`,
-        from: "assistant",
-        kind: "buttons",
-        text: bot
-          ? `I can help with ${bot.name.toLowerCase()} using the documents you’ve added. Ask a real question from your phone — I’ll keep answers short and offer the next step as buttons.`
-          : "Tell me what you need. I can look up live information, or answer from the files you upload here.",
-        buttons: [
-          { id: "deeper", title: "Go deeper" },
-          { id: "other", title: "Something else" },
-          { id: "menu", title: "Show menu" },
-        ],
-        time: "10:43",
-      },
-    ]);
+  useEffect(() => {
+    if (hint) setMessages(demoStart(chatbots));
+  }, [chatbots, hint]);
+
+  const ask = async (text: string, botId?: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setHint(false);
+    setDraft("");
+    setSending(true);
+    setMessages((prev) => [...prev, userText(trimmed, `u-${Date.now()}`)]);
+
+    const target = (botId && chatbots.find((b) => b.id === botId)) || bot;
+    if (!target) {
+      setMessages((prev) => [
+        ...prev,
+        parseAssistantReply(
+          "Create an assistant and add a document first — then this preview answers from your files. Until then, tap View options to see the menu a customer gets.",
+          `a-${Date.now()}`
+        ),
+      ]);
+      setSending(false);
+      return;
+    }
+
+    try {
+      const res = await api.query(target.id, trimmed);
+      setMessages((prev) => [...prev, parseAssistantReply(res.result.answer, `a-${Date.now()}`)]);
+      setSources(res.result.sources || []);
+    } catch (err: any) {
+      setMessages((prev) => [
+        ...prev,
+        parseAssistantReply(
+          err?.message
+            ? `I couldn’t complete that: ${err.message}`
+            : "I couldn’t reach the server. Start the ToolTap backend, then try again.",
+          `e-${Date.now()}`
+        ),
+      ]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleChoice = (title: string, id: string) => {
+    setHint(false);
+    if (id === "menu") {
+      setMessages((prev) => [
+        ...prev,
+        userText(title, `u-${Date.now()}`),
+        {
+          id: `list-${Date.now()}`,
+          from: "assistant",
+          kind: "list",
+          header: "What I can help with",
+          text: "Here’s everything I can help you with. Pick a topic or just type.",
+          footer: "Or send a message in your own words.",
+          buttonText: "View options",
+          sections: buildCapabilityList(chatbots),
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+      return;
+    }
+    if (id.startsWith("cap_")) {
+      setMessages((prev) => [
+        ...prev,
+        userText(title, `u-${Date.now()}`),
+        capabilityReply(id),
+      ]);
+      return;
+    }
+    if (id.startsWith("bot_")) {
+      const chosen = chatbots.find((b) => id === `bot_${b.id}`);
+      void ask(`Tell me what you can help with on ${title}.`, chosen?.id);
+      return;
+    }
+    void ask(title);
+  };
+
+  const replay = () => {
+    setMessages(demoStart(chatbots));
+    setHint(true);
+    setSources([]);
+    setDraft("");
   };
 
   return (
@@ -79,33 +152,53 @@ export function Home({ status, chatbots, onPage, setupDone }: Props) {
           </li>
           <li>
             <span className="plain">Send Hi</span>
-            <span>You should get a menu of actions and topics.</span>
+            <span>You should get a menu of actions and topics. Try it in the phone on the right.</span>
           </li>
         </ol>
 
-        <svg className="path-svg" viewBox="0 0 520 88" aria-hidden="true">
-          <text x="8" y="22" className="path-label">Phone</text>
-          <text x="150" y="22" className="path-label">WhatsApp</text>
-          <text x="300" y="22" className="path-label">Your files</text>
-          <text x="430" y="22" className="path-label">Reply</text>
-          <rect x="4" y="36" width="88" height="40" rx="10" />
-          <rect x="146" y="36" width="88" height="40" rx="10" />
-          <rect x="288" y="36" width="88" height="40" rx="10" />
-          <rect x="430" y="36" width="86" height="40" rx="10" />
-          <path d="M92 56 H146 M234 56 H288 M376 56 H430" />
-        </svg>
+        <PipelineStepper
+          documentCount={status?.documentCount ?? 0}
+          onAddKnowledge={() => onPage("knowledge")}
+        />
+
+        {sources.length > 0 && (
+          <div>
+            <button type="button" className="linkish" onClick={() => setShowSources((s) => !s)}>
+              {showSources ? "Hide sources" : "Show sources"}
+            </button>
+            {showSources && (
+              <ul className="src-list">
+                {sources.map((s, i) => (
+                  <li key={i}>
+                    {s.title}
+                    {s.heading_path ? ` — ${s.heading_path}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
 
       <aside className="phone-col">
-        <p className="phone-caption">Tap the menu. This is how a first conversation looks.</p>
+        <p className="phone-caption">
+          Tap <strong>View options</strong>, pick a topic, then type a question. This preview does not send a real WhatsApp message.
+        </p>
         <WhatsAppPhone
           businessName={status?.displayPhone ? "Your business" : "ToolTap"}
           subtitle={live ? "online" : "preview"}
           messages={messages}
-          onButton={(title) => handleChoice(title)}
-          onListRow={(title) => handleChoice(title)}
+          composer
+          composerValue={draft}
+          onComposerChange={setDraft}
+          onSend={() => void ask(draft)}
+          sending={sending}
+          onButton={(title, id) => handleChoice(title, id)}
+          onListRow={(title, id) => handleChoice(title, id)}
+          pulseListCta={hint}
+          placeholder="Type a question"
         />
-        <button type="button" className="linkish" onClick={() => setMessages(demoStart(chatbots, status))}>
+        <button type="button" className="linkish" onClick={replay}>
           Replay conversation
         </button>
       </aside>
@@ -113,7 +206,7 @@ export function Home({ status, chatbots, onPage, setupDone }: Props) {
   );
 }
 
-function demoStart(chatbots: Chatbot[], status: Status | null): WaMessage[] {
+function demoStart(chatbots: Chatbot[]): WaMessage[] {
   return [
     { id: "d1", from: "user", kind: "text", text: "Hi", time: "10:42" },
     {
@@ -128,4 +221,22 @@ function demoStart(chatbots: Chatbot[], status: Status | null): WaMessage[] {
       time: "10:42",
     },
   ];
+}
+
+function capabilityReply(id: string): WaMessage {
+  const copy: Record<string, string> = {
+    cap_web: "On the live line I can search the web for you. In this preview, type a question about your documents instead — or open WhatsApp on your phone.",
+    cap_weather: "On the live line I can fetch a forecast. Type a city on your phone after you connect WhatsApp, or ask about your documents here.",
+    cap_email: "On the live line I can send or check mail when that’s set up. Here, ask a question from a document you’ve uploaded.",
+  };
+  return {
+    id: `cap-${Date.now()}`,
+    from: "assistant",
+    kind: "buttons",
+    text: copy[id] || "Pick another option, or type in your own words.",
+    buttons: [
+      { id: "menu", title: "Show menu" },
+    ],
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+  };
 }

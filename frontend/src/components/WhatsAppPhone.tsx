@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { WaListSection, WaMessage } from "./types";
+import { ChevronLeft, MoreVertical, Phone, SendHorizontal, Video } from "lucide-react";
+import type { WaListSection, WaMessage } from "../types";
 
 interface Props {
   businessName: string;
@@ -13,6 +14,7 @@ interface Props {
   onSend?: () => void;
   sending?: boolean;
   placeholder?: string;
+  pulseListCta?: boolean;
 }
 
 export function WhatsAppPhone({
@@ -27,28 +29,37 @@ export function WhatsAppPhone({
   onSend,
   sending,
   placeholder = "Message",
+  pulseListCta,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [listOpen, setListOpen] = useState<WaMessage & { kind: "list" } | null>(null);
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
-  }, [messages, listOpen]);
+  }, [messages, listOpen, sending]);
 
   return (
     <div className="wa-phone">
       <div className="wa-notch">
         <span>9:41</span>
-        <span className="wa-notch-icons">▮▮▮ ⬤</span>
+        <span className="wa-notch-icons" aria-hidden="true">
+          <span className="wa-bars" />
+          <span className="wa-wifi" />
+          <span className="wa-battery" />
+        </span>
       </div>
       <header className="wa-header">
-        <span className="wa-back">‹</span>
+        <ChevronLeft size={22} strokeWidth={2} />
         <div className="wa-avatar">{businessName.slice(0, 1).toUpperCase()}</div>
         <div className="wa-header-text">
           <strong>{businessName}</strong>
           <span>{subtitle}</span>
         </div>
-        <span className="wa-header-actions">📹 📞 ⋮</span>
+        <span className="wa-header-actions">
+          <Video size={16} />
+          <Phone size={16} />
+          <MoreVertical size={16} />
+        </span>
       </header>
 
       <div className="wa-thread" ref={scroller}>
@@ -56,7 +67,7 @@ export function WhatsAppPhone({
         {messages.map((m) => (
           <div key={m.id} className={`wa-row ${m.from}`}>
             <div className={`wa-bubble ${m.from}`}>
-              {m.kind !== "text" && m.kind === "list" && m.header && (
+              {m.kind === "list" && m.header && (
                 <div className="wa-header-in">{m.header}</div>
               )}
               <p>{m.text}</p>
@@ -76,7 +87,7 @@ export function WhatsAppPhone({
               {m.kind === "list" && (
                 <button
                   type="button"
-                  className="wa-list-cta"
+                  className={`wa-list-cta ${pulseListCta && !listOpen ? "pulse-cta" : ""}`}
                   onClick={() => setListOpen(m)}
                 >
                   {m.buttonText}
@@ -87,6 +98,13 @@ export function WhatsAppPhone({
             </div>
           </div>
         ))}
+        {sending && (
+          <div className="wa-row assistant">
+            <div className="wa-bubble assistant typing">
+              <span /><span /><span />
+            </div>
+          </div>
+        )}
       </div>
 
       {listOpen && (
@@ -132,7 +150,7 @@ export function WhatsAppPhone({
             disabled={sending}
           />
           <button type="submit" disabled={sending || !composerValue.trim()} aria-label="Send">
-            ➤
+            <SendHorizontal size={16} />
           </button>
         </form>
       )}

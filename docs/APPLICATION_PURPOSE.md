@@ -15,7 +15,7 @@ The React app (`frontend/`) is the control surface, branded **ToolTap Agent Hub*
 
 The product goal is a single assistant that can both **do things** (search, weather, email, CRM, calendar) and **answer from private knowledge** (operator-defined chatbots + uploaded docs), then deliver that answer in WhatsApp’s native interactive formats with low latency.
 
-The engine is **not** coupled to EY or any other tenant. Sample data under `backend/data/` may include an example bot; RAG code only uses `bot.systemPrompt` + retrieved chunks.
+The engine is **not** coupled to any tenant. Chatbots and documents are operator-defined. RAG uses `bot.systemPrompt` plus retrieved chunks only.
 
 ## What we are trying to achieve
 

@@ -23,14 +23,14 @@ export class MultiFactorReranker {
             const semanticScore = Math.max(0, Math.min(1, rawScore));
 
             // 1. Structural Score (Heading match, hierarchy depth, tags)
-            const headingPath = cand.chunk.metadata.heading_path.toLowerCase();
-            const title = cand.chunk.metadata.title.toLowerCase();
+            const headingPath = (cand.chunk.metadata?.heading_path || "").toLowerCase();
+            const title = (cand.chunk.metadata?.title || "").toLowerCase();
 
             let structuralScore = 0.5; // Baseline
             if (headingPath.includes(queryLower) || queryLower.includes(title)) {
                 structuralScore += 0.3;
             }
-            if (cand.chunk.metadata.heading_path.includes(">")) {
+            if ((cand.chunk.metadata?.heading_path || "").includes(">")) {
                 // Higher score for deeper structured section hierarchy
                 structuralScore += 0.2;
             }

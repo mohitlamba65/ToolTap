@@ -179,6 +179,16 @@ export class KnowledgeBaseStore {
         return true;
     }
 
+    async deleteDocument(id: string): Promise<boolean> {
+        const doc = this.documents.get(id);
+        if (!doc) return false;
+        this.documents.delete(id);
+        this.saveDocuments();
+        await this.vectors.deleteDocument(id);
+        console.log(`[KBStore] Deleted document '${id}' (${doc.title})`);
+        return true;
+    }
+
     async clearCollection(collectionName: string): Promise<boolean> {
         for (const [docId, doc] of Array.from(this.documents.entries())) {
             if (doc.collectionName === collectionName) {

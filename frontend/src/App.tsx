@@ -17,10 +17,16 @@ export default function App() {
   const [chatbots, setChatbots] = useState<Chatbot[]>([]);
   const [knowledgeBot, setKnowledgeBot] = useState<string | undefined>();
   const [sentHi, setSentHi] = useState(() => localStorage.getItem(SENT_KEY) === "1");
+  const [offline, setOffline] = useState(false);
 
   const refresh = useCallback(() => {
-    api.status().then(setStatus).catch(() => setStatus(null));
-    api.chatbots().then((d) => setChatbots(d.chatbots || [])).catch(() => setChatbots([]));
+    Promise.all([api.status(), api.chatbots()])
+      .then(([s, c]) => {
+        setStatus(s);
+        setChatbots(c.chatbots || []);
+        setOffline(false);
+      })
+      .catch(() => setOffline(true));
   }, []);
 
   useEffect(() => {
@@ -49,6 +55,11 @@ export default function App() {
 
   return (
     <Layout page={page} onPage={setPage} status={status} setupDone={setupDone}>
+      {offline && (
+        <div className="banner warn">
+          Can’t reach the ToolTap server. Start the backend on port 3000, then refresh.
+        </div>
+      )}
       {page === "home" && (
         <Home status={status} chatbots={chatbots} onPage={setPage} setupDone={setupDone} />
       )}
@@ -70,9 +81,14 @@ export default function App() {
         <Assistants chatbots={chatbots} onRefresh={refresh} onOpenKnowledge={goKnowledge} />
       )}
       {page === "knowledge" && (
-        <Knowledge chatbots={chatbots} preferredId={knowledgeBot} />
+        <Knowledge
+          chatbots={chatbots}
+          preferredId={knowledgeBot}
+          onRefresh={refresh}
+          onCreateAssistant={() => setPage("assistants")}
+        />
       )}
-      {page === "try" && <TryIt chatbots={chatbots} />}
+      {page === "try" && <TryIt chatbots={chatbots} onPage={setPage} />}
       {page === "settings" && <Settings status={status} onRefresh={refresh} />}
     </Layout>
   );

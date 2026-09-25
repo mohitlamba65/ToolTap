@@ -52,8 +52,11 @@ export function Assistants({ chatbots, onRefresh, onOpenKnowledge }: Props) {
       </div>
 
       {chatbots.length === 0 && !open && (
-        <div className="empty">
+        <div className="empty cta-empty">
           <p>No assistants yet. Create one for a single job — returns, pricing, a playbook.</p>
+          <button type="button" className="btn primary" onClick={() => setOpen(true)}>
+            New assistant
+          </button>
         </div>
       )}
 

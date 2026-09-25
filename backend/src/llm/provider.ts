@@ -5,9 +5,43 @@ import { env } from "../config/env.js";
 import { ModelProvider } from "./config.js";
 
 /**
- * Builds a raw (unbound, no fallback) model instance for the configured provider.
- * GitHub Models uses the OpenAI SDK with a custom baseURL — same token, many models.
+ * GitHub Models currently returns text/plain completions. LangChain's OpenAI
+ * client expects chat.completion JSON, so wrap plain bodies before parse.
  */
+function githubCompatibleFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    return fetch(input, init).then(async (res) => {
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        if (ct.includes("text/event-stream") || ct.includes("application/json")) {
+            return res;
+        }
+        if (!res.ok) return res;
+        const text = await res.text();
+        const trimmed = text.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return new Response(trimmed, {
+                status: res.status,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
+        const wrapped = JSON.stringify({
+            id: "chatcmpl-github-plain",
+            object: "chat.completion",
+            created: Math.floor(Date.now() / 1000),
+            model: "github",
+            choices: [
+                {
+                    index: 0,
+                    message: { role: "assistant", content: text.replace(/\r\n/g, "\n").trim() },
+                    finish_reason: "stop",
+                },
+            ],
+        });
+        return new Response(wrapped, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        });
+    });
+}
 function getRawModels(maxOutputTokens?: number) {
     let primaryModel: any;
     const tokenCap = maxOutputTokens ? { maxTokens: maxOutputTokens } : {};
@@ -22,7 +56,8 @@ function getRawModels(maxOutputTokens?: number) {
                 temperature: 0,
                 timeout: 20_000,
                 maxRetries: 1,
-                configuration: { baseURL: env.githubBaseUrl },
+                useResponsesApi: false,
+                configuration: { baseURL: env.githubBaseUrl, fetch: githubCompatibleFetch },
                 ...tokenCap,
             });
             break;
@@ -35,6 +70,7 @@ function getRawModels(maxOutputTokens?: number) {
                 temperature: 0,
                 timeout: 20_000,
                 maxRetries: 1,
+                useResponsesApi: false,
                 ...tokenCap,
             });
             break;

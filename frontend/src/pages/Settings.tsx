@@ -45,8 +45,8 @@ export function Settings({ status, onRefresh }: Props) {
         <h2>Number customers see</h2>
         <p className="big-phone">{status?.displayPhone || "Not set"}</p>
         <p className="muted">
-          Set <code>WHATSAPP_DISPLAY_NUMBER</code> in the server environment to the E.164 number on the WhatsApp Business profile
-          (for example +9198xxxxxxx). Then restart the server.
+          Ask whoever runs the server to set the customer-facing E.164 number (the one on the WhatsApp Business profile), then restart.
+          It should look like +9198xxxxxxx.
         </p>
         {status?.waMeUrl && (
           <a className="btn primary sm" href={status.waMeUrl} target="_blank" rel="noreferrer">Open in WhatsApp</a>

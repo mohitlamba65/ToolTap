@@ -29,7 +29,7 @@ export function createEmbeddings(): EmbeddingsInterface {
         primary = new OpenAIEmbeddings({
             apiKey: env.githubToken,
             modelName: "text-embedding-3-small",
-            configuration: { baseURL: env.githubBaseUrl },
+            configuration: { baseURL: env.githubBaseUrl, fetch: githubCompatibleFetch },
         }) as any;
     }
 

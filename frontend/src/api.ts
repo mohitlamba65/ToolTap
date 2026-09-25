@@ -1,11 +1,20 @@
 import type { Chatbot, DocumentMeta, RagResult, Status } from "./types";
 
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || res.statusText);
+async function json<T>(res: Response | Promise<Response>): Promise<T> {
+  const response = await res;
+  const body = await response.text();
+  let parsed: any = {};
+  if (body) {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      parsed = { error: body };
+    }
   }
-  return res.json() as Promise<T>;
+  if (!response.ok) {
+    throw new Error(parsed.error || body || response.statusText);
+  }
+  return parsed as T;
 }
 
 export const api = {
@@ -38,6 +47,17 @@ export const api = {
       })
     ),
   deleteChatbot: (id: string) => fetch(`/api/chatbots/${id}`, { method: "DELETE" }),
+  deleteDocument: (id: string) =>
+    json<{ success: boolean }>(fetch(`/api/documents/${id}`, { method: "DELETE" })),
+  uploadFile: (file: File, collectionName: string, title?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("collectionName", collectionName);
+    if (title) form.append("title", title);
+    return json<{ success: boolean; result: { chunksCount: number; title: string } }>(
+      fetch("/api/kb/upload", { method: "POST", body: form })
+    );
+  },
   ingest: (payload: {
     collectionName: string;
     content: string;

@@ -2,6 +2,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
+import multer from "multer";
 import "dotenv/config";
 import { createToolTapGraph } from "./graph/graph.js";
 import { parseIncomingWebhook } from "./whatsapp/webhook-parser.js";
@@ -69,6 +70,10 @@ function getThreadId(phone: string): string {
 }
 
 const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || "my_verify_token";
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 // Provider status & toggle API
 app.get("/api/provider", (_req: Request, res: Response) => {
@@ -125,6 +130,17 @@ app.get("/api/status", (_req: Request, res: Response) => {
 app.get("/api/documents", (req: Request, res: Response) => {
     const collection = typeof req.query.collection === "string" ? req.query.collection : undefined;
     res.json({ documents: kbStore.getDocuments(collection) });
+});
+
+app.delete("/api/documents/:id", async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ error: "ID is required" });
+    try {
+        const deleted = await kbStore.deleteDocument(id);
+        res.json({ success: deleted });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Chatbot Management REST APIs
@@ -185,6 +201,38 @@ app.post("/api/kb/ingest", async (req: Request, res: Response) => {
     }
 });
 
+app.post("/api/kb/upload", upload.single("file"), async (req: Request, res: Response) => {
+    try {
+        const file = req.file;
+        const collectionName = String(req.body?.collectionName || "kb_default");
+        const title = String(req.body?.title || file?.originalname || "Untitled");
+        if (!file) {
+            return res.status(400).json({ error: "A .txt or .md file is required." });
+        }
+        const name = (file.originalname || "").toLowerCase();
+        if (!name.endsWith(".txt") && !name.endsWith(".md") && !name.endsWith(".markdown") && !name.endsWith(".csv")) {
+            return res.status(400).json({
+                error: "Please upload a .txt, .md, or .csv file. For PDFs, paste the text on the Knowledge page.",
+            });
+        }
+        const content = file.buffer.toString("utf-8");
+        if (!content.trim()) {
+            return res.status(400).json({ error: "That file is empty." });
+        }
+        const result = await kbStore.ingestDocument(
+            collectionName,
+            content,
+            file.originalname,
+            title.replace(/\.[^.]+$/, ""),
+            "general",
+            ["file_upload"]
+        );
+        res.json({ success: true, result });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // RAG Query Testing Endpoint
 app.post("/api/kb/query", async (req: Request, res: Response) => {
     try {
@@ -196,7 +244,7 @@ app.post("/api/kb/query", async (req: Request, res: Response) => {
         const result = await kbStore.queryChatbot(chatbotId, query);
         res.json({ success: true, result });
     } catch (e: any) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: e?.message || String(e) });
     }
 });
 

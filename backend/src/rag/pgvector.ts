@@ -133,6 +133,11 @@ export class PgVectorStore {
         console.log(`[pgvector] Deleted collection '${collectionName}'`);
     }
 
+    async deleteDocument(documentId: string): Promise<void> {
+        await this.ensureReady();
+        await getPool().query("DELETE FROM kb_chunks WHERE document_id = $1", [documentId]);
+    }
+
     async upsertChunks(collectionName: string, chunks: StructuredChunk[], documentId?: string): Promise<void> {
         if (chunks.length === 0) return;
         await this.ensureReady();
