@@ -89,6 +89,8 @@ h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.03em; line-height: 1.
   background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 20px 22px; margin-bottom: 20px;
 }
+.number-card-item.active-num { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.settings h1 { max-width: none; }
 .number-card span { font-size: 12px; color: var(--muted); }
 .number-card strong, .big-phone { display: block; font-size: 26px; font-weight: 500; margin: 6px 0 8px; letter-spacing: -0.02em; }
 .row-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
@@ -320,6 +322,41 @@ input, textarea, select {
   40% { opacity: 1; transform: translateY(-3px); }
 }
 
+.page-head h2 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
+.modal-card.cookbook {
+  width: min(720px, 100%);
+  max-height: min(88vh, 860px);
+  overflow: auto;
+  padding: 0 0 20px;
+}
+.modal-card.cookbook .row-actions { padding: 8px 24px 0; }
+.cook-head { position: relative; padding: 22px 24px 8px; border-bottom: 1px solid var(--line); }
+.cook-head h2 { margin: 0 0 16px; font-size: 20px; font-weight: 500; }
+.cook-back { display: block; margin: 0 0 8px; padding: 0; }
+.cook-steps {
+  list-style: none; padding: 0; margin: 0 0 8px; display: flex; gap: 10px; flex-wrap: wrap;
+}
+.cook-steps li {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+}
+.cook-steps li span {
+  width: 20px; height: 20px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  display: grid; place-items: center; font-size: 11px;
+}
+.cook-steps li.on { color: var(--ink); font-weight: 500; }
+.cook-steps li.on span { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cook-steps li.done span { background: #d9f99d; border-color: #d9f99d; }
+.cook-body { padding: 16px 24px 8px; }
+.cook-body .cook-list { margin: 0 0 16px; padding-left: 18px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.cook-body label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin-bottom: 12px; color: var(--muted); }
+.cook-body a { color: var(--accent); }
+.copy-row {
+  display: grid; grid-template-columns: 110px 1fr auto; gap: 8px; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; background: #fff;
+}
+.copy-row span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.copy-row code { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 @media (max-width: 960px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { flex-direction: row; flex-wrap: wrap; padding: 12px 16px; gap: 12px; }
@@ -330,4 +367,5 @@ input, textarea, select {
   .page { padding: 24px 16px 48px; }
   h1 { font-size: 26px; }
   .pipe-track { grid-template-columns: 1fr 1fr; }
+  .copy-row { grid-template-columns: 1fr; }
 }

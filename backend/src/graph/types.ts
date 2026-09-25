@@ -223,5 +223,6 @@ export interface InboundMessage {
     location?: { latitude: number; longitude: number; name?: string; address?: string };
     profileName?: string;
     isVoiceNote?: boolean; // true when audio type is a voice recording
+    phoneNumberId?: string | undefined; // Meta Cloud phone_number_id that received the message
 }
 

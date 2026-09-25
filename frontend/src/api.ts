@@ -1,4 +1,4 @@
-import type { Chatbot, DocumentMeta, RagResult, Status } from "./types";
+import type { Chatbot, DocumentMeta, RagResult, Status, WebhookConfig, WhatsAppCredential } from "./types";
 
 async function json<T>(res: Response | Promise<Response>): Promise<T> {
   const response = await res;
@@ -80,4 +80,36 @@ export const api = {
         body: JSON.stringify({ chatbotId, query }),
       })
     ),
+  whatsappCredentials: () =>
+    json<{ credentials: WhatsAppCredential[] }>(fetch("/api/whatsapp/credentials")),
+  createWhatsAppCredential: (payload: {
+    name: string;
+    accessToken: string;
+    phoneNumberId: string;
+    displayPhoneNumber: string;
+    verifiedName?: string;
+    whatsappBusinessAccountId?: string;
+  }) =>
+    json<{ success: boolean; credential: WhatsAppCredential }>(
+      fetch("/api/whatsapp/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+    ),
+  deleteWhatsAppCredential: (id: string) =>
+    json<{ success: boolean }>(fetch(`/api/whatsapp/credentials/${id}`, { method: "DELETE" })),
+  activateWhatsAppCredential: (id: string) =>
+    json<{ success: boolean; credential: WhatsAppCredential }>(
+      fetch(`/api/whatsapp/credentials/${id}/activate`, { method: "POST" })
+    ),
+  lookupPhoneNumber: (accessToken: string, phoneNumberId: string) =>
+    json<{ displayPhoneNumber: string; formattedPhoneNumber: string; verifiedName: string | null }>(
+      fetch("/api/whatsapp/phone-number", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken, phoneNumberId }),
+      })
+    ),
+  webhookConfig: () => json<WebhookConfig>(fetch("/api/whatsapp/webhook-config")),
 };

@@ -1,6 +1,7 @@
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { env } from "../config/env.js";
+import { githubCompatibleFetch } from "../llm/provider.js";
 
 export interface EmbeddingsInterface {
     embedQuery(text: string): Promise<number[]>;

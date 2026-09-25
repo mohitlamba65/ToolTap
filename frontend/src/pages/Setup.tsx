@@ -17,7 +17,7 @@ export function Setup({ status, chatbots, documentCount, sentHi, onSentHi, onPag
       done: Boolean(status?.tokenConfigured),
       body: status?.live
         ? `Replies will send through ${status.channelLabel}.`
-        : "Add your Cloud API token (or Twilio credentials) in Settings, then come back here.",
+        : "Connect a WhatsApp Business number in Settings (Meta cookbook), then come back here.",
       action: { label: "Open Settings", page: "settings" as PageId },
     },
     {
@@ -44,7 +44,7 @@ export function Setup({ status, chatbots, documentCount, sentHi, onSentHi, onPag
       done: sentHi,
       body: status?.displayPhone
         ? `Open WhatsApp, start a chat with ${status.displayPhone}, and send Hi.`
-        : "Set the customer-facing number in Settings, then send Hi from your own phone.",
+        : "Connect a number in Settings, then send Hi from your own phone.",
       action: null,
     },
   ];

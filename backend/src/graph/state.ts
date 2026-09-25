@@ -38,6 +38,14 @@ export const AgentGraphState = Annotation.Root({
         reducer: (x, y) => y ?? x,
         default: () => "",
     }),
+    cloudPhoneNumberId: Annotation<string>({
+        reducer: (x, y) => y ?? x,
+        default: () => "",
+    }),
+    cloudCredentialId: Annotation<string>({
+        reducer: (x, y) => y ?? x,
+        default: () => "",
+    }),
 
     // ── Orchestrator decision ────────────────────────────────────────────────
     // Set by orchestratorNode; drives conditional routing to the correct execution node.

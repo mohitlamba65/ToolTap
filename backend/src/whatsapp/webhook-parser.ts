@@ -18,6 +18,7 @@ export function parseMetaWebhook(body: any): InboundMessage[] {
         for (const change of entry.changes || []) {
             const value = change.value;
             if (!value.messages || value.messages.length === 0) continue;
+            const inboundPhoneNumberId = value.metadata?.phone_number_id as string | undefined;
 
             // Get profile name from contacts
             const contactsMap = new Map<string, string>();
@@ -32,6 +33,7 @@ export function parseMetaWebhook(body: any): InboundMessage[] {
                     timestamp: msg.timestamp,
                     type: "text",
                     profileName: contactsMap.get(msg.from) || "",
+                    ...(inboundPhoneNumberId ? { phoneNumberId: inboundPhoneNumberId } : {}),
                 };
 
                 switch (msg.type) {

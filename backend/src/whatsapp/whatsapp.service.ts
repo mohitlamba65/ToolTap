@@ -1,31 +1,31 @@
-import "dotenv/config";
+import { resolveWhatsAppCloud, graphApiBase } from "./cloud-config.js";
 
 export class WhatsAppService {
     private readonly apiUrl: string;
-    private readonly apiToken: string;
-    private readonly phoneNumberId: string;
 
     constructor() {
-        this.apiUrl = process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v19.0';
-        this.apiToken = process.env.WHATSAPP_API_TOKEN || '';
-        this.phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+        this.apiUrl = graphApiBase();
     }
 
     async sendText(to: string, text: string): Promise<string> {
+        const cloud = await resolveWhatsAppCloud();
+        if (!cloud) {
+            throw new Error("No WhatsApp Cloud credentials configured. Connect a number in Settings.");
+        }
         const payload = {
-            messaging_product: 'whatsapp',
-            recipient_type: 'individual',
+            messaging_product: "whatsapp",
+            recipient_type: "individual",
             to,
-            type: 'text',
-            text: { body: text || '...' }
+            type: "text",
+            text: { body: text || "..." },
         };
 
-        const url = `${this.apiUrl}/${this.phoneNumberId}/messages`;
+        const url = `${this.apiUrl}/${cloud.phoneNumberId}/messages`;
         const response = await fetch(url, {
-            method: 'POST',
+            method: "POST",
             headers: {
-                Authorization: `Bearer ${this.apiToken}`,
-                'Content-Type': 'application/json'
+                Authorization: `Bearer ${cloud.accessToken}`,
+                "Content-Type": "application/json",
             },
             body: JSON.stringify(payload),
         });
@@ -36,6 +36,6 @@ export class WhatsAppService {
         }
 
         const data = await response.json() as { messages?: Array<{ id: string }> };
-        return data.messages?.[0]?.id ?? '';
+        return data.messages?.[0]?.id ?? "";
     }
 }

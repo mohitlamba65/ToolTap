@@ -8,6 +8,9 @@ import { createToolTapGraph } from "./graph/graph.js";
 import { parseIncomingWebhook } from "./whatsapp/webhook-parser.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { KnowledgeBaseStore, kbStore } from "./kb/kb-store.js";
+import { whatsappCredentialRouter } from "./credentials/routes.js";
+import { whatsappCredentials } from "./credentials/whatsapp-store.js";
+import { resolveWhatsAppCloud, graphApiBase } from "./whatsapp/cloud-config.js";
 
 // ── Idempotency ────────────────────────────────────────────────────
 // Tracks WhatsApp message IDs to prevent duplicate pipeline executions.
@@ -98,17 +101,36 @@ function formatDisplayPhone(raw: string | undefined): string | null {
     return trimmed || null;
 }
 
-app.get("/api/status", (_req: Request, res: Response) => {
+app.get("/api/status", async (_req: Request, res: Response) => {
     const provider = currentProvider;
-    const displayPhone = formatDisplayPhone(
+    const assistants = kbStore.getChatbots().filter((b) => b.enabled);
+    const documents = kbStore.getDocuments();
+    let numberCount = 0;
+    let activeNumberId: string | null = null;
+    let activeNumberName: string | null = null;
+    let displayPhone = formatDisplayPhone(
         process.env.WHATSAPP_DISPLAY_NUMBER ||
         (provider === "twilio" ? process.env.TWILIO_WHATSAPP_NUMBER : undefined)
     );
-    const tokenConfigured = provider === "twilio"
+    let tokenConfigured = provider === "twilio"
         ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
         : Boolean(process.env.WHATSAPP_API_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
-    const assistants = kbStore.getChatbots().filter((b) => b.enabled);
-    const documents = kbStore.getDocuments();
+
+    if (provider !== "twilio") {
+        try {
+            const list = await whatsappCredentials.list();
+            numberCount = list.length;
+            const active = list.find((c) => c.isActive) || list[0];
+            if (active) {
+                activeNumberId = active.id;
+                activeNumberName = active.name;
+                displayPhone = formatDisplayPhone(active.metadata.displayPhoneNumber) || displayPhone;
+                tokenConfigured = true;
+            }
+        } catch (err: any) {
+            console.warn("[status] Could not load saved numbers:", err?.message || err);
+        }
+    }
 
     res.json({
         provider,
@@ -120,12 +142,17 @@ app.get("/api/status", (_req: Request, res: Response) => {
         live: tokenConfigured,
         assistantCount: assistants.length,
         documentCount: documents.length,
+        numberCount,
+        activeNumberId,
+        activeNumberName,
         channelLabel: provider === "twilio" ? "Twilio" : "WhatsApp Cloud API",
         setupHint: provider === "twilio"
             ? "Join the Twilio sandbox from your phone, then message the sandbox number shown here."
-            : "Until the app is live, only numbers you add in Meta Developer → WhatsApp → API Setup can message this business number.",
+            : "Until the app is live, only numbers you add in Meta Developer → WhatsApp → API Setup can message this business number. The webhook must be HTTPS.",
     });
 });
+
+app.use("/api/whatsapp", whatsappCredentialRouter);
 
 app.get("/api/documents", (req: Request, res: Response) => {
     const collection = typeof req.query.collection === "string" ? req.query.collection : undefined;
@@ -263,6 +290,13 @@ app.use((req: Request, res: Response, next) => {
     next();
 });
 
+function credentialIdFromPath(req: Request): string | undefined {
+    const fromParams = req.params?.credentialId;
+    if (typeof fromParams === "string" && fromParams) return fromParams;
+    const match = String(req.path || req.originalUrl || "").match(/\/api\/webhooks\/whatsapp\/([^/?#]+)/);
+    return match?.[1];
+}
+
 // Universal Webhook Handler (POST /webhook, POST /api/v1/.../webhook, or POST /)
 async function handleWebhookPost(req: Request, res: Response) {
     try {
@@ -277,6 +311,7 @@ async function handleWebhookPost(req: Request, res: Response) {
             res.status(200).send("EVENT_RECEIVED");
         }
 
+        const pathCredentialId = credentialIdFromPath(req);
         const messages = parseIncomingWebhook(req.body);
         if (messages.length === 0) {
             console.warn("⚠️ [Webhook] Webhook received but no message extracted. Check payload structure.");
@@ -310,10 +345,13 @@ async function handleWebhookPost(req: Request, res: Response) {
             } else if (type === "location" && message.location) {
                 userContent = `User shared their location: ${message.location.name || ""} ${message.location.address || ""} (lat: ${message.location.latitude}, lon: ${message.location.longitude})`;
             } else if (type === "audio" && (message.mediaUrl || message.mediaId)) {
-                // Voice transcription: fetch audio from Meta and transcribe via Gemini
-                const audioUrl = message.mediaUrl || (message.mediaId ? await fetchMetaMediaUrl(message.mediaId) : null);
+                const cloud = await resolveWhatsAppCloud({
+                    phoneNumberId: message.phoneNumberId,
+                    credentialId: pathCredentialId,
+                });
+                const audioUrl = message.mediaUrl || (message.mediaId ? await fetchMetaMediaUrl(message.mediaId, cloud?.accessToken) : null);
                 if (audioUrl) {
-                    const transcript = await transcribeAudio(audioUrl);
+                    const transcript = await transcribeAudio(audioUrl, cloud?.accessToken);
                     if (transcript) {
                         console.log(`🎙️ [Transcription] Voice message transcribed: "${transcript}"`);
                         userContent = transcript;
@@ -332,6 +370,8 @@ async function handleWebhookPost(req: Request, res: Response) {
                         messages: [new HumanMessage(userContent)],
                         recipientPhone: from,
                         profileName: profileName || "",
+                        cloudPhoneNumberId: message.phoneNumberId || "",
+                        cloudCredentialId: pathCredentialId || "",
                     },
                     {
                         configurable: { thread_id: threadId },
@@ -339,7 +379,10 @@ async function handleWebhookPost(req: Request, res: Response) {
                 );
             } catch (error: any) {
                 console.error("❌ [Server] Agent invocation error:", error?.stack || error?.message || error);
-                await sendFallbackText(from, "I'm sorry, an error occurred while processing your request.");
+                await sendFallbackText(from, "I'm sorry, an error occurred while processing your request.", {
+                    phoneNumberId: message.phoneNumberId,
+                    credentialId: pathCredentialId,
+                });
             }
         }
     } catch (error) {
@@ -347,7 +390,32 @@ async function handleWebhookPost(req: Request, res: Response) {
     }
 }
 
-// Register POST Webhook routes
+function handleWebhookVerify(req: Request, res: Response): boolean {
+    const mode = req.query["hub.mode"];
+    const challenge = req.query["hub.challenge"];
+    const token = req.query["hub.verify_token"];
+    if (mode === "subscribe" && token === verifyToken && typeof challenge === "string") {
+        console.log(`✅ Webhook verified successfully for path: ${req.path}`);
+        res.status(200).send(challenge);
+        return true;
+    }
+    return false;
+}
+
+app.get("/api/webhooks/whatsapp/:credentialId", (req, res) => {
+    if (!handleWebhookVerify(req, res)) res.status(403).send("Forbidden");
+});
+app.get("/api/webhooks/whatsapp", (req, res) => {
+    if (!handleWebhookVerify(req, res)) res.status(403).send("Forbidden");
+});
+app.post("/api/webhooks/whatsapp/:credentialId", (req, res) => {
+    void handleWebhookPost(req, res);
+});
+app.post("/api/webhooks/whatsapp", (req, res) => {
+    void handleWebhookPost(req, res);
+});
+
+// Register POST Webhook routes (after specific /api routes)
 app.use((req: Request, res: Response, next) => {
     if (req.method === "POST") {
         handleWebhookPost(req, res);
@@ -356,10 +424,19 @@ app.use((req: Request, res: Response, next) => {
     next();
 });
 
-async function sendFallbackText(to: string, text: string) {
-    const apiUrl = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
-    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+async function sendFallbackText(
+    to: string,
+    text: string,
+    opts?: { phoneNumberId?: string | undefined; credentialId?: string | undefined }
+) {
+    const cloud = await resolveWhatsAppCloud(opts);
+    if (!cloud) {
+        console.error("❌ [Server Fallback] No WhatsApp Cloud credentials configured.");
+        return;
+    }
+    const apiUrl = graphApiBase();
+    const apiToken = cloud.accessToken;
+    const phoneNumberId = cloud.phoneNumberId;
 
     try {
         const res = await fetch(`${apiUrl}/${phoneNumberId}/messages`, {
@@ -390,9 +467,10 @@ async function sendFallbackText(to: string, text: string) {
 /**
  * Resolves a Meta media ID to a direct download URL using the Media API.
  */
-async function fetchMetaMediaUrl(mediaId: string): Promise<string | null> {
-    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    const apiUrl = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
+async function fetchMetaMediaUrl(mediaId: string, accessToken?: string | undefined): Promise<string | null> {
+    const cloud = accessToken ? null : await resolveWhatsAppCloud();
+    const apiToken = accessToken || cloud?.accessToken || process.env.WHATSAPP_API_TOKEN || "";
+    const apiUrl = graphApiBase();
     try {
         const res = await fetch(`${apiUrl}/${mediaId}`, {
             headers: { Authorization: `Bearer ${apiToken}` },
@@ -503,8 +581,9 @@ async function transcribeWithGitHub(audioBuffer: ArrayBuffer, mimeType: string):
 /**
  * Downloads audio from Meta CDN and transcribes with the configured primary provider only.
  */
-async function transcribeAudio(audioUrl: string): Promise<string | null> {
-    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
+async function transcribeAudio(audioUrl: string, accessToken?: string | undefined): Promise<string | null> {
+    const cloud = accessToken ? null : await resolveWhatsAppCloud();
+    const apiToken = accessToken || cloud?.accessToken || process.env.WHATSAPP_API_TOKEN || "";
     const primaryProvider = (process.env.TRANSCRIPTION_PROVIDER ?? "openai").toLowerCase();
 
     try {
@@ -545,6 +624,9 @@ export function startServer() {
         initGraph().catch((err) => {
             console.error("❌ [Server] Fatal: graph initialization failed:", err?.message ?? err);
             process.exit(1);
+        });
+        whatsappCredentials.ensureReady().catch((err) => {
+            console.warn("[WhatsApp credentials] Schema setup deferred:", err?.message ?? err);
         });
     });
 

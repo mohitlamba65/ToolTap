@@ -8,7 +8,7 @@ import { ModelProvider } from "./config.js";
  * GitHub Models currently returns text/plain completions. LangChain's OpenAI
  * client expects chat.completion JSON, so wrap plain bodies before parse.
  */
-function githubCompatibleFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export function githubCompatibleFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     return fetch(input, init).then(async (res) => {
         const ct = (res.headers.get("content-type") || "").toLowerCase();
         if (ct.includes("text/event-stream") || ct.includes("application/json")) {

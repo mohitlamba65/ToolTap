@@ -18,8 +18,37 @@ export interface Status {
   live: boolean;
   assistantCount: number;
   documentCount: number;
+  numberCount?: number;
+  activeNumberId?: string | null;
+  activeNumberName?: string | null;
   channelLabel: string;
   setupHint: string;
+}
+
+export interface WhatsAppCredential {
+  id: string;
+  orgId: string;
+  name: string;
+  type: "WHATSAPP_CLOUD";
+  metadata: {
+    phoneNumberId: string;
+    displayPhoneNumber: string;
+    verifiedName?: string;
+    whatsappBusinessAccountId?: string;
+  };
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt: string | null;
+}
+
+export interface WebhookConfig {
+  callbackUrl: string;
+  fallbackCallbackUrl: string;
+  perNumberPathHint?: string;
+  usesCustomWebhookPath: boolean;
+  verifyToken: string;
+  verifyTokenConfigured: boolean;
 }
 
 export interface DocumentMeta {

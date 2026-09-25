@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { resolveWhatsAppCloud, graphApiBase } from "../whatsapp/cloud-config.js";
 
 interface TTSOptions {
     voice?: string;
@@ -183,13 +184,20 @@ export async function generateSpeechAudio(text: string, options: TTSOptions = {}
  * Uploads an audio Buffer to Meta's WhatsApp Media API to obtain a `media_id`.
  * This allows sending native voice notes on WhatsApp without hosting public files.
  */
-export async function uploadAudioToMeta(audioBuffer: Buffer, mimeType = "audio/mpeg"): Promise<string | null> {
-    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
-    const apiUrl = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
+export async function uploadAudioToMeta(
+    audioBuffer: Buffer,
+    mimeType = "audio/mpeg",
+    cloud?: { accessToken: string; phoneNumberId: string } | null
+): Promise<string | null> {
+    const resolved = cloud?.accessToken
+        ? cloud
+        : (await resolveWhatsAppCloud()) || { accessToken: "", phoneNumberId: "" };
+    const apiToken = resolved.accessToken;
+    const phoneNumberId = resolved.phoneNumberId;
+    const apiUrl = graphApiBase();
 
     if (!apiToken || !phoneNumberId) {
-        console.warn("⚠️ [Meta Media] WHATSAPP_API_TOKEN or WHATSAPP_PHONE_NUMBER_ID missing.");
+        console.warn("⚠️ [Meta Media] No Cloud API credentials (save a number in Settings, or set env fallback).");
         return null;
     }
 

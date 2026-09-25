@@ -15,6 +15,7 @@ import type {
 } from "../types.js";
 
 import { generateSpeechAudio, uploadAudioToMeta } from "../../utils/tts.js";
+import { resolveWhatsAppCloud, graphApiBase } from "../../whatsapp/cloud-config.js";
 
 /**
  * Ensures standard Markdown (e.g. **bold**, ### Header) is converted to WhatsApp syntax.
@@ -37,7 +38,7 @@ export function sanitizeWhatsAppMarkdown(text: string | undefined): string {
  * decision and constructs the exact JSON payload Meta expects.
  */
 export async function deliveryNode(state: AgentState): Promise<Partial<AgentState>> {
-    const { responseIntent, recipientPhone } = state;
+    const { responseIntent, recipientPhone, cloudPhoneNumberId, cloudCredentialId } = state;
 
     if (!responseIntent || !recipientPhone) {
         console.error("[DeliveryNode] Missing responseIntent or recipientPhone");
@@ -66,11 +67,16 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
 
     // ── Text-To-Speech (TTS) Voice Generation ─────────────────────────────────
     // If messageType is audio and no media URL/ID was provided, synthesize speech via OpenAI TTS
+    const cloud = await resolveWhatsAppCloud({
+        phoneNumberId: cloudPhoneNumberId || undefined,
+        credentialId: cloudCredentialId || undefined,
+    });
+
     if (responseIntent.messageType === "audio" && !responseIntent.mediaId && !responseIntent.mediaUrl) {
         console.log(`🎙️ [DeliveryNode] Generating Text-To-Speech audio output for response...`);
         const audioBuffer = await generateSpeechAudio(responseIntent.text);
         if (audioBuffer) {
-            const mediaId = await uploadAudioToMeta(audioBuffer, "audio/mpeg");
+            const mediaId = await uploadAudioToMeta(audioBuffer, "audio/mpeg", cloud || undefined);
             if (mediaId) {
                 responseIntent.mediaId = mediaId;
                 console.log(`✅ [DeliveryNode] Voice audio uploaded to Meta with Media ID: ${mediaId}`);
@@ -87,8 +93,7 @@ export async function deliveryNode(state: AgentState): Promise<Partial<AgentStat
     }
 
     const payload = buildPayload(responseIntent, recipientPhone);
-    await sendToWhatsApp(payload);
-
+    await sendToWhatsApp(payload, cloud);
     return { whatsappPayload: payload };
 }
 
@@ -361,10 +366,15 @@ function buildReactionPayload(intent: ResponseIntent, to: string): WhatsAppReact
 /**
  * Sends the constructed payload to Meta's WhatsApp Cloud API.
  */
-async function sendToWhatsApp(payload: WhatsAppPayload): Promise<void> {
-    const apiUrl = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
-    const apiToken = process.env.WHATSAPP_API_TOKEN || "";
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+async function sendToWhatsApp(payload: WhatsAppPayload, cloud?: Awaited<ReturnType<typeof resolveWhatsAppCloud>>): Promise<void> {
+    const resolved = cloud || await resolveWhatsAppCloud();
+    if (!resolved) {
+        console.error("❌ [DeliveryNode] No WhatsApp Cloud credentials (save a number in Settings, or set env fallback).");
+        return;
+    }
+    const apiUrl = graphApiBase();
+    const apiToken = resolved.accessToken;
+    const phoneNumberId = resolved.phoneNumberId;
 
     const url = `${apiUrl}/${phoneNumberId}/messages`;
 
@@ -393,7 +403,7 @@ async function sendToWhatsApp(payload: WhatsAppPayload): Promise<void> {
                 console.error(`👉 Fix: Go to Meta Developers Portal -> WhatsApp -> API Setup -> Add phone number '${payload.to}' to 'To' list & enter OTP.`);
             } else if (errCode === 190) {
                 console.error(`💡 [Meta Setup Required]: Your WHATSAPP_API_TOKEN has expired.`);
-                console.error(`👉 Fix: Generate a new Temporary/Permanent Access Token in Meta Developers Portal & update WHATSAPP_API_TOKEN in .env.`);
+                console.error(`👉 Fix: Generate a new token in Settings → Connect number (or rotate the Meta system user token).`);
             }
 
             // Fall back to plain text if interactive/image/document failed
