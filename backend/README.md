@@ -90,12 +90,14 @@ docker-compose up -d
 
 If `CREATE EXTENSION vector` fails on an old volume, run `docker-compose down -v` once (this wipes local DB data) then `up -d` again.
 
+Schema is created automatically on first backend start (no migration CLI). For hosted deployment (Render, Neon, Vercel), see [../DEPLOY.md](../DEPLOY.md).
+
 ### 5. Start Development Server
 ```bash
 npm run dev
 ```
 
-The server listens on `http://localhost:3000`. Set up a public tunnel (e.g. ngrok) to point Meta Webhooks to `/api/v1/workspaces/:workspaceId/whatsapp/:channelId/webhook`.
+The server listens on `http://localhost:3000`. Set up a public tunnel (e.g. ngrok) and configure Meta webhooks to `/api/webhooks/whatsapp` (see Settings in the dashboard).
 
 ---
 

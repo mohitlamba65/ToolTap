@@ -2,6 +2,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
+import { buildCorsOptions } from "./cors-config.js";
 import multer from "multer";
 import "dotenv/config";
 import { createToolTapGraph } from "./graph/graph.js";
@@ -44,7 +45,7 @@ function markProcessed(messageId: string): void {
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors(buildCorsOptions()));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(bodyParser.json({ limit: "50mb" }));

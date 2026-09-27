@@ -15,19 +15,49 @@ const { Pool } = pg;
 
 let pool: InstanceType<typeof Pool> | null = null;
 
+/** node-pg ignores sslmode in the URL unless `ssl` is set; Neon requires TLS. */
+export function normalizePostgresUrl(raw: string): string {
+    return raw
+        .replace(/([?&])channel_binding=[^&]*&?/gi, (_, sep) => (sep === "?" ? "?" : ""))
+        .replace(/\?&/g, "?")
+        .replace(/\?$/, "");
+}
+
+export function resolvePostgresSsl(connStr: string): false | { rejectUnauthorized: boolean } {
+    const forced = (process.env.POSTGRES_SSL || "").trim().toLowerCase();
+    if (forced === "false" || forced === "0") return false;
+    if (forced === "true" || forced === "1") return { rejectUnauthorized: true };
+
+    const lower = connStr.toLowerCase();
+    if (lower.includes("sslmode=disable")) return false;
+    if (
+        lower.includes("sslmode=require") ||
+        lower.includes("sslmode=verify-full") ||
+        lower.includes("sslmode=verify-ca") ||
+        lower.includes("sslmode=prefer")
+    ) {
+        return { rejectUnauthorized: true };
+    }
+    if (lower.includes("neon.tech") || lower.includes("supabase.co")) {
+        return { rejectUnauthorized: true };
+    }
+    return false;
+}
+
 export function buildConnectionString(): string {
-    return (
+    const raw =
         process.env.POSTGRES_URL ??
-        `postgresql://${process.env.POSTGRES_USER ?? "tooltap"}:${process.env.POSTGRES_PASSWORD ?? "tooltap_secret"}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5433"}/${process.env.POSTGRES_DB ?? "tooltap"}?sslmode=disable`
-    );
+        `postgresql://${process.env.POSTGRES_USER ?? "tooltap"}:${process.env.POSTGRES_PASSWORD ?? "tooltap_secret"}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5433"}/${process.env.POSTGRES_DB ?? "tooltap"}?sslmode=disable`;
+    return normalizePostgresUrl(raw);
 }
 
 export function getPool(): InstanceType<typeof Pool> {
     if (!pool) {
-        const connStr = buildConnectionString(); // includes ?sslmode=disable
+        const connStr = buildConnectionString();
+        const ssl = resolvePostgresSsl(connStr);
         pool = new Pool({
             connectionString: connStr,
-            ssl: false,
+            ssl,
             max: 10,
             idleTimeoutMillis: 30_000,
             connectionTimeoutMillis: 5_000,

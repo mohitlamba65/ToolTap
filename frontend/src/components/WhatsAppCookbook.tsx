@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { API_BASE } from "../lib/api-base";
 import type { WebhookConfig } from "../types";
 
 const STEPS = ["Requirements", "User token", "Phone number", "Webhook"];
@@ -133,7 +134,9 @@ export function WhatsAppCookbook({ open, onClose, onCreated }: Props) {
 
   if (!open) return null;
 
-  const webhookUrl = hook?.callbackUrl || `${window.location.origin.replace(/:\d+$/, ":3000")}/api/webhooks/whatsapp`;
+  const webhookFallbackBase =
+    API_BASE || `${window.location.protocol}//${window.location.hostname}:3000`;
+  const webhookUrl = hook?.callbackUrl || `${webhookFallbackBase}/api/webhooks/whatsapp`;
   const verifyToken = hook?.verifyToken || "";
 
   return (
